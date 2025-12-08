@@ -1,0 +1,9 @@
+pandas
+polars
+numpy
+pyarrow
+fastparquet
+sqlalchemy
+matplotlib
+seaborn
+jupyterlab
