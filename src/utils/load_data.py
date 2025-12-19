@@ -6,7 +6,7 @@ import pandas as pd
 import sqlite3
 from pathlib import Path
 import logging
-from database import initialize_database
+from database import initialize_database, normalize_from_sources
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -174,7 +174,10 @@ def load_all_data(data_dir: Path = RAW_DATA_PATH, fresh_start: bool = False):
         alerts = load_alerts(data_dir / "SOS_202511181012.xlsx")
         insert_alerts(alerts, conn)
         
-        logger.info("\n✓✓✓ All data loaded successfully! ✓✓✓")
+        # Normalize and sync derived tables from raw imports
+        normalize_from_sources(conn)
+        
+        logger.info("\n✓✓✓ All data loaded and normalized successfully! ✓✓✓")
         
         # Print summary statistics
         print_summary_stats(conn)
@@ -187,11 +190,21 @@ def print_summary_stats(conn: sqlite3.Connection):
     """Print database summary statistics."""
     cursor = conn.cursor()
     
+    def _count(table: str) -> int:
+        try:
+            return int(cursor.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+        except sqlite3.OperationalError:
+            return 0
+    
     stats = {
-        "seniors": cursor.execute("SELECT COUNT(*) FROM seniors").fetchone()[0],
-        "measurements": cursor.execute("SELECT COUNT(*) FROM measurements").fetchone()[0],
-        "medical_records": cursor.execute("SELECT COUNT(*) FROM medical_info").fetchone()[0],
-        "alerts": cursor.execute("SELECT COUNT(*) FROM alerts").fetchone()[0],
+        "seniors": _count("seniors"),
+        "measurements": _count("measurements"),
+        "alerts": _count("alerts"),
+        "medical_info (raw)": _count("medical_info"),
+        "diseases": _count("diseases"),
+        "medicines": _count("medicines"),
+        "senior_diseases": _count("senior_diseases"),
+        "senior_medicines": _count("senior_medicines"),
     }
     
     print("\n" + "="*50)

@@ -111,13 +111,46 @@ class DataStore:
             return self.query("SELECT * FROM alerts ORDER BY alert_date DESC")
     
     def get_seniors_with_diseases(self, disease_name: str) -> pd.DataFrame:
-        """Find seniors with specific disease."""
-        sql = """
-        SELECT DISTINCT senior_id, disease_names 
-        FROM medical_info 
-        WHERE disease_names LIKE :disease
+        """Find seniors with a specific disease (normalized schema preferred).
+        Falls back to raw medical_info LIKE if normalized not present.
         """
-        return self.query(sql, disease=f"%{disease_name}%")
+        try:
+            sql = """
+            SELECT DISTINCT sd.senior_id
+            FROM senior_diseases sd
+            JOIN diseases d ON d.id = sd.disease_id
+            WHERE d.disease_name LIKE :disease COLLATE NOCASE
+            """
+            return self.query(sql, disease=f"%{disease_name}%")
+        except Exception:
+            sql = """
+            SELECT DISTINCT senior_id, disease_names 
+            FROM medical_info 
+            WHERE disease_names LIKE :disease
+            """
+            return self.query(sql, disease=f"%{disease_name}%")
+
+    def get_senior_diseases(self, senior_id: int) -> pd.DataFrame:
+        """List diseases for a senior from normalized tables."""
+        sql = """
+        SELECT d.disease_name
+        FROM senior_diseases sd
+        JOIN diseases d ON d.id = sd.disease_id
+        WHERE sd.senior_id = :sid
+        ORDER BY d.disease_name
+        """
+        return self.query(sql, sid=senior_id)
+
+    def get_senior_medicines(self, senior_id: int) -> pd.DataFrame:
+        """List medicines for a senior from normalized tables."""
+        sql = """
+        SELECT m.medicine_name
+        FROM senior_medicines sm
+        JOIN medicines m ON m.id = sm.medicine_id
+        WHERE sm.senior_id = :sid
+        ORDER BY m.medicine_name
+        """
+        return self.query(sql, sid=senior_id)
     
     def export_to_csv(self, table_name: str, output_path: Path):
         """Export entire table to CSV."""
