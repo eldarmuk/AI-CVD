@@ -3,3 +3,7 @@
 /data/raw/HRP/
 __pycache__/
 *.pyc
+
+# database files
+*.db
+*.sqlite3
