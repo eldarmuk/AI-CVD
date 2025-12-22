@@ -7,3 +7,6 @@ __pycache__/
 # database files
 *.db
 *.sqlite3
+
+# Trash
+.trash/
