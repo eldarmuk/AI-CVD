@@ -1,6 +1,5 @@
 .vscode/
-/data/raw/ptb-xl/
-/data/raw/HRP/
+/data/raw/
 __pycache__/
 *.pyc
 
