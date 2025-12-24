@@ -2,7 +2,6 @@ pandas
 polars
 numpy
 openpyxl
-pyarrow
 fastparquet
 sqlalchemy
 matplotlib
