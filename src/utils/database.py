@@ -34,7 +34,10 @@ def initialize_database(db_path: Path = DB_PATH) -> sqlite3.Connection:
     cursor.executescript("""
     -- Core seniors table (central entity)
     CREATE TABLE IF NOT EXISTS seniors (
-        id INTEGER PRIMARY KEY
+        id INTEGER PRIMARY KEY,
+        gender TEXT,
+        birthdate DATE,
+        age INTEGER
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_seniors_id ON seniors(id);
     
@@ -124,6 +127,13 @@ def initialize_database(db_path: Path = DB_PATH) -> sqlite3.Connection:
         ON alerts(alert_date);
     """)
     
+    _ensure_seniors_demographics_columns(conn)
+    # Create index for gender (safe if column already existed)
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_seniors_gender ON seniors(gender);")
+    except sqlite3.OperationalError as exc:
+        logger.warning(f"Skipping gender index creation: {exc}")
+
     conn.commit()
     
     # Backfill and migrate from existing data into normalized tables
@@ -135,6 +145,23 @@ def initialize_database(db_path: Path = DB_PATH) -> sqlite3.Connection:
     
     logger.info(f"Database initialized at {db_path}")
     return conn
+
+
+def _ensure_seniors_demographics_columns(conn: sqlite3.Connection) -> None:
+    """Ensure seniors table has demographic columns even on existing databases."""
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(seniors)")
+    existing_cols = {row[1] for row in cur.fetchall()}
+
+    additions = [
+        ("gender", "ALTER TABLE seniors ADD COLUMN gender TEXT"),
+        ("birthdate", "ALTER TABLE seniors ADD COLUMN birthdate DATE"),
+        ("age", "ALTER TABLE seniors ADD COLUMN age INTEGER"),
+    ]
+
+    for col_name, ddl in additions:
+        if col_name not in existing_cols:
+            cur.execute(ddl)
 
 
 def _ensure_seniors_populated(conn: sqlite3.Connection) -> None:

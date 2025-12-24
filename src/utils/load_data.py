@@ -6,50 +6,32 @@ import pandas as pd
 import sqlite3
 from pathlib import Path
 import logging
-from database import initialize_database, normalize_from_sources
+from typing import Iterable, List
+from database import initialize_database, normalize_from_sources, bulk_upsert_seniors
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-RAW_DATA_PATH = Path(__file__).parent.parent / "data" / "raw" / "HRP"
+RAW_DATA_PATH = Path(__file__).parent.parent / "data" / "raw" / "HRP_new"
 
 
-def load_measurements_data(excel_path: Path) -> pd.DataFrame:
-    """
-    Load all measurement sheets from Excel file and normalize them.
-    
-    File structure for each sheet:
-    - Column 0: seniorID
-    - Column 1: value (measurement value)
-    - Column 2: sbp (systolic blood pressure - may be NULL for non-BP)
-    - Column 3: dbp (diastolic blood pressure - may be NULL for non-BP)
-    - Column 4: date (timestamp)
-    - Column 5: type (parameter type e.g., Steps, Heart Rate)
-    
-    Args:
-        excel_path: Path to data_202511181045.xlsx
-        
-    Returns:
-        DataFrame with columns: senior_id, value, sbp, dbp, date, type
-    """
+def _load_single_measurement_file(excel_path: Path) -> pd.DataFrame:
+    """Load and normalize one measurement Excel file (multi-sheet)."""
     logger.info(f"Loading measurements from {excel_path}")
-    
-    # Get all sheet names
+
     xls = pd.ExcelFile(excel_path)
     sheet_names = xls.sheet_names
     logger.info(f"Found {len(sheet_names)} sheets: {sheet_names}")
-    
+
     all_measurements = []
-    
+
     for sheet_name in sheet_names:
-        # Skip non-data sheets if needed
         if sheet_name.startswith("_"):
             continue
-            
+
         df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="pyarrow")
         logger.info(f"  {sheet_name}: {len(df)} rows, {df.shape[1]} columns")
-        
-        # Extract columns: seniorID, value, sbp, dbp, date, type
+
         df_normalized = pd.DataFrame({
             "senior_id": df.iloc[:, 0],
             "value": df.iloc[:, 1],
@@ -58,22 +40,72 @@ def load_measurements_data(excel_path: Path) -> pd.DataFrame:
             "date": df.iloc[:, 4],
             "type": df.iloc[:, 5]
         })
-        
-        # Convert data types
+
+        # Type conversions
         df_normalized["senior_id"] = pd.to_numeric(df_normalized["senior_id"], errors="coerce")
         df_normalized["value"] = pd.to_numeric(df_normalized["value"], errors="coerce")
         df_normalized["sbp"] = pd.to_numeric(df_normalized["sbp"], errors="coerce")
         df_normalized["dbp"] = pd.to_numeric(df_normalized["dbp"], errors="coerce")
         df_normalized["type"] = df_normalized["type"].astype(str).str.strip()
-        
-        # Remove rows with NULL senior_id
+
+        # Drop rows missing senior_id
         df_normalized = df_normalized.dropna(subset=["senior_id"])
-        
+
         all_measurements.append(df_normalized)
-    
-    df_all = pd.concat(all_measurements, ignore_index=True)
-    logger.info(f"Total measurements loaded: {len(df_all)}")
+
+    return pd.concat(all_measurements, ignore_index=True)
+
+
+def load_measurements_data(excel_path: Path | List[Path]) -> pd.DataFrame:
+    """Load measurement data from one or many Excel files and normalize."""
+    paths: List[Path] = [excel_path] if isinstance(excel_path, Path) else list(excel_path)
+    frames = []
+    for path in paths:
+        frames.append(_load_single_measurement_file(path))
+    df_all = pd.concat(frames, ignore_index=True)
+    logger.info(f"Total measurements loaded across files: {len(df_all)}")
     return df_all
+
+
+def load_seniors_demographics(excel_path: Path) -> pd.DataFrame:
+    """Load seniors demographics (gender, birthdate, age)."""
+    logger.info(f"Loading seniors demographics from {excel_path}")
+    df = pd.read_excel(excel_path, engine="pyarrow")
+    df = df.rename(columns={
+        "seniorID": "senior_id",
+        "gender": "gender",
+        "birthDate": "birthdate",
+        "age": "age"
+    })
+    if "senior_id" not in df.columns:
+        raise ValueError("seniors demographics file must contain 'seniorID' column")
+
+    df["senior_id"] = pd.to_numeric(df["senior_id"], errors="coerce")
+    df["age"] = pd.to_numeric(df.get("age"), errors="coerce")
+    if "birthdate" in df.columns:
+        df["birthdate"] = pd.to_datetime(df["birthdate"], errors="coerce").dt.date
+
+    df = df.dropna(subset=["senior_id"])
+    logger.info(f"Loaded {len(df)} senior demographic rows")
+    return df[["senior_id", "gender", "birthdate", "age"]]
+
+
+def insert_seniors_demographics(df: pd.DataFrame, conn: sqlite3.Connection):
+    """Upsert seniors with demographic info."""
+    if df.empty:
+        logger.info("No senior demographics to insert")
+        return
+
+    records = df.to_dict(orient="records")
+    with conn:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO seniors (id, gender, birthdate, age)
+            VALUES (:senior_id, :gender, :birthdate, :age)
+            """,
+            records,
+        )
+    logger.info(f"Upserted {len(df)} seniors with demographics")
 
 
 def load_medical_info(excel_path: Path) -> pd.DataFrame:
@@ -153,6 +185,15 @@ def load_all_data(data_dir: Path = RAW_DATA_PATH, fresh_start: bool = False):
         data_dir: Directory containing the Excel files
         fresh_start: If True, delete existing database and start fresh
     """
+    measurement_files = [
+        data_dir / "data_202512221122-01-09.xlsx",
+        data_dir / "data_202512221231-16-23.xlsx",
+        data_dir / "data_202512221344-24-30.xlsx",
+    ]
+    medical_file = data_dir / "Med&Diseases_202512221410.xlsx"
+    alerts_file = data_dir / "SOS_202512221411.xlsx"
+    seniors_demo_file = data_dir / "SeniorGenderAge_202512221409.xlsx"
+
     # Initialize database
     db_path = Path(__file__).parent.parent / "db" / "hrp_data.db"
     if fresh_start and db_path.exists():
@@ -162,16 +203,25 @@ def load_all_data(data_dir: Path = RAW_DATA_PATH, fresh_start: bool = False):
     conn = initialize_database(db_path)
     
     try:
+        # Load seniors demographics first (to satisfy FK during measurements insert)
+        if seniors_demo_file.exists():
+            seniors_df = load_seniors_demographics(seniors_demo_file)
+            insert_seniors_demographics(seniors_df, conn)
+        else:
+            logger.warning(f"Seniors demographic file not found: {seniors_demo_file}")
+
         # Load measurements (largest dataset)
-        measurements = load_measurements_data(data_dir / "data_202511181045.xlsx")
+        measurements = load_measurements_data(measurement_files)
+        # Ensure seniors exist for FK before insert
+        bulk_upsert_seniors(conn, measurements["senior_id"].dropna().unique())
         insert_measurements(measurements, conn)
         
         # Load medical info
-        medical_info = load_medical_info(data_dir / "Med&Dis_202511181011.xlsx")
+        medical_info = load_medical_info(medical_file)
         insert_medical_info(medical_info, conn)
         
         # Load alerts
-        alerts = load_alerts(data_dir / "SOS_202511181012.xlsx")
+        alerts = load_alerts(alerts_file)
         insert_alerts(alerts, conn)
         
         # Normalize and sync derived tables from raw imports
