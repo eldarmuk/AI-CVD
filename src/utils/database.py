@@ -11,7 +11,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path(__file__).parent.parent / "db" / "hrp_data.db"
+DB_PATH = Path(__file__).parent.parent.parent / "db" / "hrp_data.db"
 
 
 def initialize_database(db_path: Path = DB_PATH) -> sqlite3.Connection:
@@ -26,6 +26,11 @@ def initialize_database(db_path: Path = DB_PATH) -> sqlite3.Connection:
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    # Performance and durability settings for bulk ingest
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA synchronous = NORMAL;")
+    conn.execute("PRAGMA temp_store = MEMORY;")
+    conn.execute("PRAGMA cache_size = -200000;")  # ~200MB cache
     # Ensure foreign keys are enforced
     conn.execute("PRAGMA foreign_keys = ON;")
     cursor = conn.cursor()
@@ -125,6 +130,14 @@ def initialize_database(db_path: Path = DB_PATH) -> sqlite3.Connection:
         ON alerts(senior_id, alert_date);
     CREATE INDEX IF NOT EXISTS idx_alerts_alert_date 
         ON alerts(alert_date);
+
+    -- Ingestion state for resumable loads
+    CREATE TABLE IF NOT EXISTS ingestion_state (
+        source TEXT PRIMARY KEY, -- e.g., 'measurements::<file>::<sheet>'
+        status TEXT NOT NULL,    -- 'done' | 'in-progress'
+        rows_processed INTEGER DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
     """)
     
     _ensure_seniors_demographics_columns(conn)
