@@ -11,3 +11,6 @@ __pycache__/
 
 # Trash
 .trash/
+
+# Reports
+reports/
