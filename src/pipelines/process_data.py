@@ -31,7 +31,7 @@ warnings.filterwarnings('ignore')
 # ============================================================================
 
 CURRENT_YEAR = 2026
-CHUNK_SIZE = 500_000  # Process measurements in batches
+CHUNK_SIZE = 5_000_000  # Process measurements in batches
 BURST_WINDOW_MINUTES = 10  # Merge alerts within this window
 
 # Outlier clipping ranges
@@ -417,7 +417,7 @@ def process_measurements_chunked(conn_in, conn_out):
         last_id = chunk['id'].max()
         
         # Convert date to datetime
-        chunk['date'] = pd.to_datetime(chunk['date'])
+        chunk['date'] = pd.to_datetime(chunk['date'], format='ISO8601')
         
         # Identify duplicates
         dup_cols = ['senior_id', 'date', 'type']
@@ -506,7 +506,7 @@ def process_alerts(conn_in, conn_out):
     df['severity'] = df['sos_note'].apply(classify_severity)
     
     # Convert alert_date to datetime
-    df['alert_date'] = pd.to_datetime(df['alert_date'])
+    df['alert_date'] = pd.to_datetime(df['alert_date'], format='ISO8601')
     
     # Sort by senior_id and alert_date
     df = df.sort_values(['senior_id', 'alert_date']).reset_index(drop=True)
