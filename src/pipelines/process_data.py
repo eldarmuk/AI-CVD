@@ -358,7 +358,6 @@ def process_measurements_chunked(conn_in, conn_out):
     print("\n" + "="*80)
     print("PROCESSING MEASUREMENTS TABLE (CHUNKED & RESUMABLE)")
     print("="*80)
-    return
     # Get total row count
     total_rows = pd.read_sql_query("SELECT COUNT(*) as cnt FROM measurements", conn_in).iloc[0]['cnt']
     print(f"Total measurements: {total_rows:,}")
@@ -531,10 +530,10 @@ def process_alerts(conn_in, conn_out):
         result['severity'] = group['severity'].max()  # Maximum severity
         result['event_size'] = len(group)  # Number of alerts in burst
         
-        # Concatenate notes if multiple
+        # Concatenate unique notes if multiple
         if len(group) > 1:
-            notes = group['sos_note'].dropna().tolist()
-            result['sos_note'] = ' | '.join([str(n) for n in notes[:3]])  # Keep first 3
+            notes = group['sos_note'].dropna().unique().tolist()
+            result['sos_note'] = ' | '.join([str(n) for n in notes])
         
         return result
     
@@ -603,7 +602,7 @@ def create_risk_profiles(conn_in, conn_out):
     print(f"Unique diseases: {len(diseases_lookup):,}")
     
     # Map disease IDs to names
-    disease_map = dict(zip(diseases_lookup['id'], diseases_lookup['name']))
+    disease_map = dict(zip(diseases_lookup['id'], diseases_lookup['disease_name']))
     diseases_df['disease_name'] = diseases_df['disease_id'].map(disease_map)
     
     # Categorize diseases
