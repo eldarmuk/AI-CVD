@@ -31,7 +31,7 @@ warnings.filterwarnings('ignore')
 # ============================================================================
 
 CURRENT_YEAR = 2026
-CHUNK_SIZE = 1_000_000  # Process measurements in batches
+CHUNK_SIZE = 500_000  # Process measurements in batches
 BURST_WINDOW_MINUTES = 10  # Merge alerts within this window
 
 # Outlier clipping ranges
@@ -168,26 +168,25 @@ def categorize_disease(disease_name):
 
 def round_measurements(df):
     """Round measurement values to appropriate decimal places."""
-    # Vectorized rounding based on measurement type (avoids per-type loops)
-    decimals_map = {
-        'Heartrate': 0,
-        'Saturation': 0,
-        'Steps': 0,
-        'Temperature': 1,
-    }
+    # Ensure types are numeric before rounding
+    for col in ['value', 'sbp', 'dbp']:
+        if col in df.columns and df[col].dtype == 'object':
+            df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    value_decimals = df['type'].map(decimals_map)
-    value_mask = value_decimals.notna() & df['value'].notna()
-    if value_mask.any():
-        df.loc[value_mask, 'value'] = (
-            df.loc[value_mask, 'value'].round(value_decimals[value_mask].astype(int))
-        )
+    # Round Value column based on type
+    # We use np.where for speed instead of .loc masks in a loop
+    is_temp = (df['type'] == 'Temperature')
     
-    # Round blood pressure columns (vectorized)
+    # Round Temperature to 1 decimal, others to 0
+    df['value'] = np.where(is_temp, 
+                           np.round(df['value'], 1), 
+                           np.round(df['value'], 0))
+    
+    # Round Blood Pressure to 0 decimals
     if 'sbp' in df.columns:
-        df['sbp'] = np.where(df['sbp'].notna(), df['sbp'].round(0), df['sbp'])
+        df['sbp'] = np.round(df['sbp'], 0)
     if 'dbp' in df.columns:
-        df['dbp'] = np.where(df['dbp'].notna(), df['dbp'].round(0), df['dbp'])
+        df['dbp'] = np.round(df['dbp'], 0)
     
     return df
 
@@ -322,7 +321,11 @@ def get_checkpoint(conn_out, table_name):
             "SELECT last_offset FROM processing_checkpoints WHERE table_name = ?",
             (table_name,)
         ).fetchone()
-        return result[0] if result else 0
+        if result:
+            offset = result[0]
+            # Ensure it's an integer, not bytes
+            return int(offset) if offset is not None else 0
+        return 0
     except Exception:
         return 0
 
@@ -330,10 +333,12 @@ def get_checkpoint(conn_out, table_name):
 def update_checkpoint(conn_out, table_name, offset, completed=False):
     """Update the checkpoint for a table."""
     cursor = conn_out.cursor()
+    # Ensure offset is an integer
+    offset = int(offset) if offset is not None else 0
     cursor.execute("""
         INSERT OR REPLACE INTO processing_checkpoints (table_name, last_offset, completed)
         VALUES (?, ?, ?)
-    """, (table_name, offset, completed))
+    """, (table_name, offset, 1 if completed else 0))
     conn_out.commit()
 
 
@@ -353,7 +358,7 @@ def process_measurements_chunked(conn_in, conn_out):
     print("\n" + "="*80)
     print("PROCESSING MEASUREMENTS TABLE (CHUNKED & RESUMABLE)")
     print("="*80)
-    
+    return
     # Get total row count
     total_rows = pd.read_sql_query("SELECT COUNT(*) as cnt FROM measurements", conn_in).iloc[0]['cnt']
     print(f"Total measurements: {total_rows:,}")
@@ -374,10 +379,12 @@ def process_measurements_chunked(conn_in, conn_out):
     """)
     conn_out.commit()
     
-    # Check for checkpoint
-    offset = get_checkpoint(conn_out, 'measurements')
-    if offset > 0:
-        print(f"\n⚠ Resuming from checkpoint: offset {offset:,}")
+    # Check for checkpoint - now stores last_id instead of offset
+    last_id = get_checkpoint(conn_out, 'measurements')
+    last_id = int(last_id)  # Ensure it's an integer
+    
+    if last_id > 0:
+        print(f"\n⚠ Resuming from checkpoint: last_id {last_id:,}")
         existing_count = cursor_out.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
         print(f"  - Already processed: {existing_count:,} rows")
     else:
@@ -388,15 +395,16 @@ def process_measurements_chunked(conn_in, conn_out):
     total_processed = existing_count
     total_written = existing_count
     
-    pbar = tqdm(total=total_rows, desc="Processing measurements", unit="rows")
+    pbar = tqdm(total=total_rows, initial=existing_count, desc="Processing measurements", unit="rows")
     
-    while offset < total_rows:
-        # Load chunk with ORDER BY for efficient duplicate detection
+    while True:  # CHANGE 1: Use infinite loop with break condition
+        # CHANGE 2: Use WHERE id > last_id instead of OFFSET
         query = f"""
             SELECT id, senior_id, value, sbp, dbp, date, type
             FROM measurements
-            ORDER BY senior_id, date, type
-            LIMIT {CHUNK_SIZE} OFFSET {offset}
+            WHERE id > {last_id}
+            ORDER BY id
+            LIMIT {CHUNK_SIZE}
         """
         chunk = pd.read_sql_query(query, conn_in)
         
@@ -406,31 +414,22 @@ def process_measurements_chunked(conn_in, conn_out):
         chunk_size = len(chunk)
         total_processed += chunk_size
         
+        # CHANGE 3: Update last_id to max id in chunk
+        last_id = chunk['id'].max()
+        
         # Convert date to datetime
-        chunk['date_dt'] = pd.to_datetime(chunk['date'])
+        chunk['date'] = pd.to_datetime(chunk['date'])
         
         # Identify duplicates
-        dup_cols = ['senior_id', 'date_dt', 'type']
+        dup_cols = ['senior_id', 'date', 'type']
         
-        # Group duplicates and resolve
-        duplicate_mask = chunk.duplicated(subset=dup_cols, keep=False)
-
-        if duplicate_mask.any():
-            clean_rows = chunk[~duplicate_mask]
-            dirty_rows = chunk[duplicate_mask]
-            
-            resolved_rows = dirty_rows.groupby(dup_cols, as_index=False).agg({
-                'value': 'mean',
-                'sbp': 'mean',
-                'dbp': 'mean',
-                'id': 'first'
-            })
-            chunk_dedup = pd.concat([clean_rows, resolved_rows], ignore_index=True)
-        else:
-            chunk_dedup = chunk
-        
-        # Ensure numeric types
-        chunk_dedup['value'] = pd.to_numeric(chunk_dedup['value'], errors='coerce')
+        # CHANGE 4: Use .agg() but preserve groupby columns
+        chunk_dedup = chunk.groupby(dup_cols, as_index=False).agg({
+            'value': 'mean',
+            'sbp': 'mean',
+            'dbp': 'mean',
+            'id': 'first'
+        })
         
         # Round values
         chunk_dedup = round_measurements(chunk_dedup)
@@ -444,19 +443,17 @@ def process_measurements_chunked(conn_in, conn_out):
         # Convert date back to ISO string
         chunk_dedup['date'] = chunk_dedup['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
         
-        # Drop the id column (will be auto-generated)
-        if 'id' in chunk_dedup.columns:
-            chunk_dedup = chunk_dedup.drop(columns=['id'])
+        # Drop id column - let SQLite auto-generate new ids
+        chunk_dedup = chunk_dedup.drop(columns=['id'])
         
         # Write to output database
         chunk_dedup.to_sql('measurements', conn_out, if_exists='append', index=False)
         total_written += len(chunk_dedup)
         
-        # Update checkpoint every chunk
-        update_checkpoint(conn_out, 'measurements', offset + CHUNK_SIZE)
+        # CHANGE 5: Update checkpoint with last_id
+        update_checkpoint(conn_out, 'measurements', last_id)
         
         pbar.update(chunk_size)
-        offset += CHUNK_SIZE
     
     pbar.close()
     
@@ -464,8 +461,10 @@ def process_measurements_chunked(conn_in, conn_out):
     print(f"  - Total processed: {total_processed:,}")
     print(f"  - Total written: {total_written:,}")
     print(f"  - Duplicates removed: {total_processed - total_written:,}")
+    
     # Mark as completed
-    update_checkpoint(conn_out, 'measurements', offset, completed=True)
+    update_checkpoint(conn_out, 'measurements', last_id, completed=True)
+    
     # Create indexes
     print("\nCreating indexes...")
     cursor_out.execute("CREATE INDEX IF NOT EXISTS idx_measurements_senior ON measurements(senior_id)")
