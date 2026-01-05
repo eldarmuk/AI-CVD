@@ -33,6 +33,7 @@ warnings.filterwarnings('ignore')
 CURRENT_YEAR = 2026
 CHUNK_SIZE = 5_000_000  # Process measurements in batches
 BURST_WINDOW_MINUTES = 10  # Merge alerts within this window
+PULSE_PRESSURE_MIN = 10  # Minimum valid pulse pressure
 
 # Outlier clipping ranges
 OUTLIER_RANGES = {
@@ -438,6 +439,7 @@ def process_measurements_chunked(conn_in, conn_out):
         
         # Add pulse pressure feature
         chunk_dedup['pulse_pressure'] = chunk_dedup['sbp'] - chunk_dedup['dbp']
+        chunk_dedup.loc[chunk_dedup['pulse_pressure'] < PULSE_PRESSURE_MIN, 'pulse_pressure'] = np.nan
         
         # Convert date back to ISO string
         chunk_dedup['date'] = chunk_dedup['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
