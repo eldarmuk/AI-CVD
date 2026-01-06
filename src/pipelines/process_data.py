@@ -33,6 +33,7 @@ warnings.filterwarnings('ignore')
 CURRENT_YEAR = 2026
 CHUNK_SIZE = 5_000_000  # Process measurements in batches
 BURST_WINDOW_MINUTES = 10  # Merge alerts within this window
+PULSE_PRESSURE_MIN = 10  # Minimum valid pulse pressure
 
 # Outlier clipping ranges
 OUTLIER_RANGES = {
@@ -117,6 +118,27 @@ DISEASE_CATEGORIES = {
 # HELPER FUNCTIONS
 # ============================================================================
 
+
+def get_valid_senior_ids(conn_out):
+    """Retrieve valid senior IDs from the processed seniors table."""
+    cursor = conn_out.cursor()
+    cols_info = cursor.execute("PRAGMA table_info(seniors)").fetchall()
+    cols = [c[1] for c in cols_info] if cols_info else []
+
+    id_col = None
+    if 'id' in cols:
+        id_col = 'id'
+    elif 'senior_id' in cols:
+        id_col = 'senior_id'
+
+    if not id_col:
+        raise RuntimeError("Could not determine senior identifier column in 'seniors' table (expected 'id' or 'senior_id').")
+
+    df_ids = pd.read_sql_query(f"SELECT {id_col} AS senior_id FROM seniors", conn_out)
+    sids = pd.to_numeric(df_ids['senior_id'], errors='coerce').dropna().astype(int).tolist()
+    return set(sids)
+
+
 def classify_severity(note):
     if pd.isna(note):
         return 0
@@ -168,21 +190,16 @@ def categorize_disease(disease_name):
 
 def round_measurements(df):
     """Round measurement values to appropriate decimal places."""
-    # Ensure types are numeric before rounding
     for col in ['value', 'sbp', 'dbp']:
         if col in df.columns and df[col].dtype == 'object':
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    # Round Value column based on type
-    # We use np.where for speed instead of .loc masks in a loop
     is_temp = (df['type'] == 'Temperature')
     
-    # Round Temperature to 1 decimal, others to 0
     df['value'] = np.where(is_temp, 
                            np.round(df['value'], 1), 
                            np.round(df['value'], 0))
     
-    # Round Blood Pressure to 0 decimals
     if 'sbp' in df.columns:
         df['sbp'] = np.round(df['sbp'], 0)
     if 'dbp' in df.columns:
@@ -323,7 +340,6 @@ def get_checkpoint(conn_out, table_name):
         ).fetchone()
         if result:
             offset = result[0]
-            # Ensure it's an integer, not bytes
             return int(offset) if offset is not None else 0
         return 0
     except Exception:
@@ -333,7 +349,6 @@ def get_checkpoint(conn_out, table_name):
 def update_checkpoint(conn_out, table_name, offset, completed=False):
     """Update the checkpoint for a table."""
     cursor = conn_out.cursor()
-    # Ensure offset is an integer
     offset = int(offset) if offset is not None else 0
     cursor.execute("""
         INSERT OR REPLACE INTO processing_checkpoints (table_name, last_offset, completed)
@@ -361,6 +376,10 @@ def process_measurements_chunked(conn_in, conn_out):
     # Get total row count
     total_rows = pd.read_sql_query("SELECT COUNT(*) as cnt FROM measurements", conn_in).iloc[0]['cnt']
     print(f"Total measurements: {total_rows:,}")
+
+    # Load valid seniors from processed 'seniors' table in output DB
+    valid_seniors = get_valid_senior_ids(conn_out)
+    print(f"Valid seniors in processed DB: {len(valid_seniors):,}")
     
     # Create output table
     cursor_out = conn_out.cursor()
@@ -395,9 +414,9 @@ def process_measurements_chunked(conn_in, conn_out):
     total_written = existing_count
     
     pbar = tqdm(total=total_rows, initial=existing_count, desc="Processing measurements", unit="rows")
+    dropped_not_in_seniors = 0
     
-    while True:  # CHANGE 1: Use infinite loop with break condition
-        # CHANGE 2: Use WHERE id > last_id instead of OFFSET
+    while True:
         query = f"""
             SELECT id, senior_id, value, sbp, dbp, date, type
             FROM measurements
@@ -413,16 +432,26 @@ def process_measurements_chunked(conn_in, conn_out):
         chunk_size = len(chunk)
         total_processed += chunk_size
         
-        # CHANGE 3: Update last_id to max id in chunk
+        # Update last_id to max id in chunk
         last_id = chunk['id'].max()
+
+        # Filter rows to only those seniors present in processed seniors table
+        before_filter = len(chunk)
+        chunk = chunk[chunk['senior_id'].isin(valid_seniors)]
+        dropped_not_in_seniors += (before_filter - len(chunk))
+        if chunk.empty:
+            # No rows to write for this chunk, but progress and checkpoint updated
+            update_checkpoint(conn_out, 'measurements', last_id)
+            pbar.update(chunk_size)
+            continue
         
-        # Convert date to datetime (handle microseconds)
+        # Convert date to datetime
         chunk['date'] = pd.to_datetime(chunk['date'], format='ISO8601')
         
         # Identify duplicates
         dup_cols = ['senior_id', 'date', 'type']
         
-        # CHANGE 4: Use .agg() but preserve groupby columns
+        # Use .agg() but preserve groupby columns
         chunk_dedup = chunk.groupby(dup_cols, as_index=False).agg({
             'value': 'mean',
             'sbp': 'mean',
@@ -438,6 +467,7 @@ def process_measurements_chunked(conn_in, conn_out):
         
         # Add pulse pressure feature
         chunk_dedup['pulse_pressure'] = chunk_dedup['sbp'] - chunk_dedup['dbp']
+        chunk_dedup.loc[chunk_dedup['pulse_pressure'] < PULSE_PRESSURE_MIN, 'pulse_pressure'] = np.nan
         
         # Convert date back to ISO string
         chunk_dedup['date'] = chunk_dedup['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
@@ -449,7 +479,7 @@ def process_measurements_chunked(conn_in, conn_out):
         chunk_dedup.to_sql('measurements', conn_out, if_exists='append', index=False)
         total_written += len(chunk_dedup)
         
-        # CHANGE 5: Update checkpoint with last_id
+        # Update checkpoint with last_id
         update_checkpoint(conn_out, 'measurements', last_id)
         
         pbar.update(chunk_size)
@@ -459,7 +489,8 @@ def process_measurements_chunked(conn_in, conn_out):
     print("\n✓ Measurements processing complete")
     print(f"  - Total processed: {total_processed:,}")
     print(f"  - Total written: {total_written:,}")
-    print(f"  - Duplicates removed: {total_processed - total_written:,}")
+    print(f"  - Dropped (not in seniors): {dropped_not_in_seniors:,}")
+    print(f"  - Duplicates removed (after filtering): {total_processed - dropped_not_in_seniors - total_written:,}")
     
     # Mark as completed
     update_checkpoint(conn_out, 'measurements', last_id, completed=True)
@@ -501,11 +532,18 @@ def process_alerts(conn_in, conn_out):
     # Load alerts
     df = pd.read_sql_query("SELECT * FROM alerts", conn_in)
     print(f"Initial alerts: {len(df):,}")
+
+    # Filter by valid seniors present in processed DB
+    valid_seniors = get_valid_senior_ids(conn_out)
+    before_filter = len(df)
+    df = df[df['senior_id'].isin(valid_seniors)]
+    dropped_not_in_seniors = before_filter - len(df)
+    print(f"After filtering unknown seniors: {len(df):,} (dropped {dropped_not_in_seniors:,})")
     
     # Apply severity classification
     df['severity'] = df['sos_note'].apply(classify_severity)
     
-    # Convert alert_date to datetime (handle microseconds)
+    # Convert alert_date to datetime
     df['alert_date'] = pd.to_datetime(df['alert_date'], format='ISO8601')
     
     # Sort by senior_id and alert_date
@@ -600,6 +638,13 @@ def create_risk_profiles(conn_in, conn_out):
     
     print(f"Total disease records: {len(diseases_df):,}")
     print(f"Unique diseases: {len(diseases_lookup):,}")
+
+    # Filter to valid seniors present in processed DB
+    valid_seniors = get_valid_senior_ids(conn_out)
+    before_filter = len(diseases_df)
+    diseases_df = diseases_df[diseases_df['senior_id'].isin(valid_seniors)]
+    dropped_not_in_seniors = before_filter - len(diseases_df)
+    print(f"After filtering unknown seniors: {len(diseases_df):,} (dropped {dropped_not_in_seniors:,})")
     
     # Map disease IDs to names
     disease_map = dict(zip(diseases_lookup['id'], diseases_lookup['disease_name']))
@@ -660,11 +705,19 @@ def copy_auxiliary_tables(conn_in, conn_out):
         'senior_medicines'
     ]
     
+    valid_seniors = get_valid_senior_ids(conn_out)
+
     for table in tables_to_copy:
         try:
             df = pd.read_sql_query(f"SELECT * FROM {table}", conn_in)
+            if table in ('senior_diseases', 'senior_medicines') and 'senior_id' in df.columns:
+                before = len(df)
+                df = df[df['senior_id'].isin(valid_seniors)]
+                dropped = before - len(df)
+                print(f"✓ Filtered {table}: kept {len(df):,}, dropped {dropped:,} (unknown seniors)")
+            else:
+                print(f"✓ Copied {table}: {len(df):,} rows")
             df.to_sql(table, conn_out, if_exists='replace', index=False)
-            print(f"✓ Copied {table}: {len(df):,} rows")
         except Exception as e:
             print(f"⚠ Warning: Could not copy {table}: {e}")
 
