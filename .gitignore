@@ -1,5 +1,4 @@
 .vscode/
-/data/raw/
 __pycache__/
 *.pyc
 
@@ -14,3 +13,16 @@ __pycache__/
 
 # Reports
 reports/
+
+# Data Files
+*.parquet
+*.npy
+*.csv
+*.json
+*.db
+*.sqlite
+
+# Specific large directories
+data/processed/
+data/raw/
+models/
