@@ -5,7 +5,7 @@ from typing import Optional
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler, Sampler
+from torch.utils.data import Dataset, DataLoader, Sampler, WeightedRandomSampler
 from torch.optim import AdamW
 import matplotlib.pyplot as plt
 import random
@@ -23,7 +23,7 @@ BATCH_SIZE = 64
 LR = 1e-3
 WEIGHT_DECAY = 1e-4
 EPOCHS = 50
-PATIENCE = 10
+PATIENCE = 8
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 PATHS = {
     "X_train": "data/processed/sequences/X_train.npy",
@@ -37,7 +37,6 @@ SEED = 42
 
 # Multi-class weights (capped for stability)
 NUM_CLASSES = 4
-CLASS_WEIGHTS = torch.tensor([1.0, 10.0, 15.0, 25.0]).to(DEVICE)
 
 def _worker_init_fn(worker_id: int) -> None:
     """Top-level worker init fn so it is picklable on Windows spawn.
@@ -176,7 +175,7 @@ class BiGRUAttention(nn.Module):
         self.attention = DotProductAttention(hidden_dim * 2)
         self.fc = nn.Sequential(
             nn.Linear(hidden_dim * 2, 64),
-            nn.ReLU(),
+            nn.LeakyReLU(negative_slope=0.01),
             nn.Dropout(0.2),
             nn.Linear(64, num_classes),
         )
@@ -242,12 +241,13 @@ def train_loop(
     lr: float = LR,
     weight_decay: float = WEIGHT_DECAY,
 ):
-    criterion = nn.CrossEntropyLoss(weight=CLASS_WEIGHTS)
+    criterion = nn.CrossEntropyLoss()
     opt = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.5, patience=2)
 
     best_val_loss = float("inf")
     epochs_no_improve = 0
-    history = {"train_loss": [], "val_loss": []}
+    history = {"train_loss": [], "val_loss": [], "val_f1_macro": []}
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -274,7 +274,7 @@ def train_loop(
             train_loss += loss.item() * batch_size
             n += batch_size
 
-        train_loss /= n
+        train_loss /= max(n, 1)
         history["train_loss"].append(train_loss)
 
         # Validation
@@ -302,14 +302,22 @@ def train_loop(
 
         # Metrics (optional: f1 macro)
         f1_macro = 0.0
+        unique_preds = np.unique(np.concatenate(y_preds)) # CHECK THIS
         if _HAS_SKLEARN and len(y_trues) > 0:
             try:
                 y_trues_flat = np.concatenate(y_trues)
                 y_preds_flat = np.concatenate(y_preds)
-                f1_macro = f1_score(y_trues_flat, y_preds_flat, average="macro")
+                f1_macro = f1_score(y_trues_flat, y_preds_flat, average="macro", zero_division=0)
             except: pass
 
-        print(f"Epoch {epoch:02d}: Train Loss={train_loss:.4f} | Val Loss={val_loss:.4f} | Val F1_macro={f1_macro:.4f}")
+        scheduler.step(val_loss)
+        current_lr = opt.param_groups[0]['lr']
+
+        # DEBUG PRINT: Show us exactly what classes are being predicted
+        print(f"Epoch {epoch:02d}: Train={train_loss:.4f} | Val={val_loss:.4f} | F1={f1_macro:.4f} | Preds={unique_preds}")
+
+        # print(f"Epoch {epoch:02d}: Train Loss={train_loss:.4f} | Val Loss={val_loss:.4f} | Val F1_macro={f1_macro:.4f} | LR={current_lr:.6f}")
+        history["val_f1_macro"].append(f1_macro)
 
         # Early stopping
         if val_loss < best_val_loss:
@@ -353,10 +361,36 @@ def main(args):
     train_dataset = NPYDataset(args.x_train, args.y_train)
     val_dataset = NPYDataset(args.x_val, args.y_val)
 
+    file_size = os.path.getsize(args.y_train)
+    offset = 128 if file_size % 1 != 0 else 0
+    y_train_all = np.memmap(args.y_train, dtype='int8', mode='r', offset=offset)
+    
+    # Count classes
+    class_counts = np.bincount(y_train_all[:len(train_dataset)], minlength=4)
+    print(f"  Class Counts: {class_counts}")
+    
+    # Avoid div by zero
+    class_counts = class_counts.astype(float)
+    class_counts[class_counts == 0] = 1.0 
+    
+    # Weight = 1 / count
+    class_weights = 1.0 / class_counts
+    # Normalize weights
+    class_weights = class_weights / class_weights.sum()
+    
+    # Assign weight to every sample
+    # map class index -> weight
+    sample_weights = class_weights[y_train_all[:len(train_dataset)]]
+    sample_weights = torch.from_numpy(sample_weights).double()
+    
+    # Create Sampler
+    train_sampler = WeightedRandomSampler(sample_weights, len(sample_weights))
+    print("  Sampler Ready. Batches will be balanced.")
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        sampler=train_sampler,
         num_workers=0,
         pin_memory=True,
         worker_init_fn=_worker_init_fn,
@@ -374,7 +408,7 @@ def main(args):
         worker_init_fn=_worker_init_fn,
     )
 
-    model = BiGRUAttention(input_dim=args.input_dim, hidden_dim=64, num_layers=2, dropout=0.3, num_classes=NUM_CLASSES)
+    model = BiGRUAttention(input_dim=args.input_dim, num_classes=NUM_CLASSES)
     model.to(device)
 
     train_loop(
