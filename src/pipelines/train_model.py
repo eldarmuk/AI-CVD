@@ -5,7 +5,7 @@ from typing import Optional
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
+from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler, Sampler
 from torch.optim import AdamW
 import matplotlib.pyplot as plt
 import random
@@ -19,12 +19,11 @@ from .generate_sequences import SEQ_LEN
 
 # Configurations
 FEATURE_COUNT = 33 #! UPDATE THIS IF FEATURES CHANGE
-BATCH_SIZE = 512
+BATCH_SIZE = 64
 LR = 1e-3
 WEIGHT_DECAY = 1e-4
-POS_WEIGHT = 5.0  # Weight for positive class (handle 1:20 imbalance)
 EPOCHS = 50
-PATIENCE = 5
+PATIENCE = 10
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 PATHS = {
     "X_train": "data/processed/sequences/X_train.npy",
@@ -36,6 +35,9 @@ PATHS = {
 SAVE_PATH = "models/bi_gru_best.pt"
 SEED = 42
 
+# Multi-class weights (capped for stability)
+NUM_CLASSES = 4
+CLASS_WEIGHTS = torch.tensor([1.0, 10.0, 15.0, 25.0]).to(DEVICE)
 
 def _worker_init_fn(worker_id: int) -> None:
     """Top-level worker init fn so it is picklable on Windows spawn.
@@ -159,7 +161,7 @@ class DotProductAttention(nn.Module):
 
 
 class BiGRUAttention(nn.Module):
-    def __init__(self, input_dim=33, hidden_dim=64, num_layers=2, dropout=0.3):
+    def __init__(self, input_dim=33, hidden_dim=64, num_layers=2, dropout=0.3, num_classes=4):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.gru = nn.GRU(
@@ -176,15 +178,57 @@ class BiGRUAttention(nn.Module):
             nn.Linear(hidden_dim * 2, 64),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(64, 1),
+            nn.Linear(64, num_classes),
         )
 
     def forward(self, x):
         # x: (batch, seq_len, input_dim)
         h, _ = self.gru(x)  # h: (batch, seq_len, hidden_dim*2)
         context, attn = self.attention(h)
-        out = self.fc(context)
+        out = self.fc(context)  # (batch, num_classes)
         return out, attn
+
+class StratifiedValidationSampler(Sampler):
+    """scans y_val to find ALL positives and mixes them with random negatives."""
+
+    def __init__(self, labels_path, n_negatives=5000, dataset_len=None):
+        self.labels_path = labels_path
+        self.n_negatives = n_negatives
+        self.dataset_len = dataset_len
+        self.indices = self._build_indices()
+
+    def _build_indices(self):
+        print("Scanning Validation Labels for Stratified Sampling...")
+        l_size = os.path.getsize(self.labels_path)
+        offset = 128 if l_size % 1 != 0 else 0
+        n_samples = l_size - offset
+        y = np.memmap(self.labels_path, dtype='int8', mode='r', offset=offset, shape=(n_samples,))
+
+        # Limit to dataset_len if provided
+        max_len = self.dataset_len if self.dataset_len is not None else n_samples
+        y = y[:max_len]
+
+        pos_indices = np.where(y > 0)[0]
+        neg_indices = np.where(y == 0)[0]
+
+        print(f"  Found {len(pos_indices)} Positives and {len(neg_indices)} Negatives in Val.")
+
+        if len(neg_indices) > self.n_negatives:
+            selected_neg = np.random.choice(neg_indices, size=self.n_negatives, replace=False)
+        else:
+            selected_neg = neg_indices
+
+        indices = np.concatenate([pos_indices, selected_neg])
+        np.random.shuffle(indices)
+
+        print(f"  Created Golden Validation Set: {len(indices)} samples ({len(pos_indices)} Pos / {len(selected_neg)} Neg)")
+        return indices.tolist()
+
+    def __iter__(self):
+        return iter(self.indices)
+
+    def __len__(self):
+        return len(self.indices)
 
 
 def train_loop(
@@ -193,99 +237,83 @@ def train_loop(
     val_loader,
     device,
     epochs: int = EPOCHS,
-    pos_weight: float = POS_WEIGHT,
     patience: int = PATIENCE,
     save_path: str = SAVE_PATH,
     lr: float = LR,
     weight_decay: float = WEIGHT_DECAY,
 ):
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], device=device))
+    criterion = nn.CrossEntropyLoss(weight=CLASS_WEIGHTS)
     opt = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-    best_loss = float("inf")
+    best_val_loss = float("inf")
     epochs_no_improve = 0
-    history = {"train_loss": [], "val_loss": [], "val_auprc": [], "val_f1": []}
+    history = {"train_loss": [], "val_loss": []}
 
     for epoch in range(1, epochs + 1):
         model.train()
-        running_loss = 0.0
+        train_loss = 0.0
         n = 0
         for batch in train_loader:
             if isinstance(batch, (list, tuple)):
                 x, y = batch
             else:
-                # if labels not included, assume last column contains label
                 raise RuntimeError("Train loader must return (x, y)")
             x = x.to(device)
-            y = y.to(device).float()
+            y = y.to(device).long()
 
             opt.zero_grad()
             logits, _ = model(x)
-            loss = criterion(logits, y.unsqueeze(-1))
+            loss = criterion(logits, y)
             loss.backward()
+
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
             opt.step()
 
             batch_size = x.size(0)
-            running_loss += loss.item() * batch_size
+            train_loss += loss.item() * batch_size
             n += batch_size
 
-        train_loss = running_loss / n
+        train_loss /= n
         history["train_loss"].append(train_loss)
 
         # Validation
         model.eval()
-        val_running = 0.0
+        val_loss = 0.0
         vn = 0
         y_trues = []
-        y_probs = []
+        y_preds = []
         with torch.no_grad():
             for batch in val_loader:
                 x, y = batch
                 x = x.to(device)
-                y = y.to(device).float()
+                y = y.to(device).long()
                 logits, _ = model(x)
-                loss = criterion(logits, y.unsqueeze(-1))
-                val_running += loss.item() * x.size(0)
+                loss = criterion(logits, y)
+                val_loss += loss.item() * x.size(0)
                 vn += x.size(0)
                 # collect for metrics
-                probs = torch.sigmoid(logits).detach().cpu().numpy().ravel()
-                y_np = y.detach().cpu().numpy().ravel()
-                y_probs.append(probs)
+                preds = torch.argmax(logits, dim=1).cpu().numpy()
+                y_np = y.cpu().numpy()
+                y_preds.append(preds)
                 y_trues.append(y_np)
-        val_loss = val_running / max(vn, 1)
+        val_loss = val_loss / max(vn, 1)
         history["val_loss"].append(val_loss)
 
-        # compute metrics on concatenated arrays
-        if _HAS_SKLEARN and vn > 0:
-            import numpy as _np
-
-            y_probs = _np.concatenate(y_probs, axis=0)
-            y_trues = _np.concatenate(y_trues, axis=0)
+        # Metrics (optional: f1 macro)
+        f1_macro = 0.0
+        if _HAS_SKLEARN and len(y_trues) > 0:
             try:
-                auprc = average_precision_score(y_trues, y_probs)
-            except Exception:
-                auprc = float("nan")
-            # threshold at 0.5 for F1
-            y_pred = (y_probs >= 0.5).astype(int)
-            try:
-                f1 = f1_score(y_trues, y_pred)
-            except Exception:
-                f1 = float("nan")
-        else:
-            auprc = float("nan")
-            f1 = float("nan")
+                y_trues_flat = np.concatenate(y_trues)
+                y_preds_flat = np.concatenate(y_preds)
+                f1_macro = f1_score(y_trues_flat, y_preds_flat, average="macro")
+            except: pass
 
-        history["val_auprc"].append(auprc)
-        history["val_f1"].append(f1)
-
-        print(
-            f"Epoch {epoch:03d}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
-            f"val_AUPRC={auprc:.4f} val_F1={f1:.4f}"
-        )
+        print(f"Epoch {epoch:02d}: Train Loss={train_loss:.4f} | Val Loss={val_loss:.4f} | Val F1_macro={f1_macro:.4f}")
 
         # Early stopping
-        if val_loss < best_loss:
-            best_loss = val_loss
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             epochs_no_improve = 0
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             torch.save(model.state_dict(), save_path)
@@ -334,21 +362,19 @@ def main(args):
         worker_init_fn=_worker_init_fn,
     )
 
-    # validation sampler: use 10% of val data (random subset)
-    val_len = len(val_dataset)
-    subset_size = int(val_len * 0.1)
-    indices = np.random.permutation(val_len)[:subset_size]
-    val_sampler = SubsetRandomSampler(indices)
+
+    # Pass dataset length to sampler to avoid out-of-bounds indices
+    stratified_sampler = StratifiedValidationSampler(args.y_val, n_negatives=5000, dataset_len=len(val_dataset))
     val_loader = DataLoader(
         val_dataset,
         batch_size=args.batch_size,
-        sampler=val_sampler,
-        num_workers=4,
+        sampler=stratified_sampler,
+        num_workers=0,
         pin_memory=True,
         worker_init_fn=_worker_init_fn,
     )
 
-    model = BiGRUAttention(input_dim=args.input_dim, hidden_dim=64, num_layers=2, dropout=0.3)
+    model = BiGRUAttention(input_dim=args.input_dim, hidden_dim=64, num_layers=2, dropout=0.3, num_classes=NUM_CLASSES)
     model.to(device)
 
     train_loop(
@@ -357,7 +383,6 @@ def main(args):
         val_loader,
         device,
         epochs=args.epochs,
-        pos_weight=args.pos_weight,
         patience=args.patience,
         save_path=args.save_path,
         lr=args.lr,
@@ -375,7 +400,6 @@ if __name__ == "__main__":
     parser.add_argument("--y_val", default=PATHS["y_val"])
     parser.add_argument("--batch_size", type=int, default=BATCH_SIZE)
     parser.add_argument("--epochs", type=int, default=EPOCHS)
-    parser.add_argument("--pos_weight", type=float, default=POS_WEIGHT)
     parser.add_argument("--patience", type=int, default=PATIENCE)
     parser.add_argument("--save_path", default=SAVE_PATH)
     parser.add_argument("--input_dim", type=int, default=33)
