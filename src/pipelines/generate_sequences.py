@@ -32,20 +32,20 @@ def impute_and_scale(df, feature_cols, train_seniors):
     2. Fits scaler on TRAIN seniors only.
     3. Transforms the whole DF.
     """
-    print("Imputing missing values (Forward Fill)...")
-    # Groupby ffill is slow, so we use a faster method if data is sorted
-    # We assume df is already sorted by senior_id, timestamp
+    print("Imputing missing values (ffill, bfill, fillna)...")
+    # Step A: Forward fill per senior
     df[feature_cols] = df.groupby("senior_id")[feature_cols].ffill()
-    df[feature_cols] = df[feature_cols].fillna(0) # Fill remaining leading NaNs with 0
-    
+    # Step B: Backward fill per senior
+    df[feature_cols] = df.groupby("senior_id")[feature_cols].bfill()
+    # Step C: Fill any remaining NaNs with 0 (or global mean if available)
+    df[feature_cols] = df[feature_cols].fillna(0)
+
     print("Fitting Scaler on Training data...")
     scaler = StandardScaler()
     train_mask = df["senior_id"].isin(train_seniors)
     scaler.fit(df.loc[train_mask, feature_cols])
-    
+
     print("Transforming data...")
-    # We perform in-place modification to save memory if possible, 
-    # but safe casting to float32 is better.
     df[feature_cols] = scaler.transform(df[feature_cols]).astype(np.float32)
     return df
 
@@ -54,44 +54,46 @@ def collect_indices(df, seniors, seq_len, horizon, stride, downsample=False):
     Pass 1: Don't save data yet. Just find the valid START INDICES and their LABELS.
     This allows us to downsample *indices* before allocating massive memory.
     """
-    indices = [] # Stores (senior_id, start_row_idx, max_future_label)
-    
-    # We need a fast lookup for row indices. 
-    # Since df is large, we iterate by senior chunks.
-    
+    indices = []  # Stores (senior_id, start_row_idx, max_severity_label)
+
     for sid in tqdm(seniors, desc="Indexing Windows"):
         group = df[df["senior_id"] == sid]
         if len(group) < seq_len + horizon:
             continue
-            
+
         # Get raw arrays for speed
-        g_labels = group["label_3"].values # Assuming 0,1,2,3
-        g_indices = group.index.values # The global row indices in the main DF
-        
-        # Vectorized Windowing
+        g_label_1 = group["label_1"].values
+        g_label_2 = group["label_2"].values
+        g_label_3 = group["label_3"].values
+        g_indices = group.index.values  # The global row indices in the main DF
+
         # Valid starts: from 0 up to length - seq - horizon
-        # Note: We fix the "Off-by-one" here by using +1 in arange
         max_start = len(group) - seq_len - horizon
         starts = np.arange(0, max_start + 1, stride)
-        
+
         for start in starts:
-            # DEFINITION OF TARGET:
-            # Look at the window [end : end + horizon]
-            # If ANY acute event (3) happens, label is 3. 
-            # If not, but potential (2), label is 2. etc.
-            # We use max() to capture the worst event in the next 24h.
             end = start + seq_len
-            future_window = g_labels[end : end + horizon]
-            
-            # Skip windows where future is unknown (should be handled by max_start, but safety check)
-            if len(future_window) == 0:
+            # Look at the window [end : end + horizon]
+            fw_1 = g_label_1[end : end + horizon]
+            fw_2 = g_label_2[end : end + horizon]
+            fw_3 = g_label_3[end : end + horizon]
+
+            # Skip windows where future is unknown
+            if len(fw_1) == 0 or len(fw_2) == 0 or len(fw_3) == 0:
                 continue
-                
-            label = np.max(future_window)
-            
-            # Store Global Index and Label
+
+            # Multi-class max severity logic
+            if np.any(fw_3 > 0):
+                label = 3
+            elif np.any(fw_2 > 0):
+                label = 2
+            elif np.any(fw_1 > 0):
+                label = 1
+            else:
+                label = 0
+
             indices.append((g_indices[start], label))
-            
+
     return indices
 
 def balance_indices(indices, ratio):
