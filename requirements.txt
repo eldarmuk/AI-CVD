@@ -1,9 +1,11 @@
 pandas
 polars
-numpy
 openpyxl
 fastparquet
 sqlalchemy
 matplotlib
 seaborn
 jupyterlab
+scikit-learn
+tqdm
+xgboost
