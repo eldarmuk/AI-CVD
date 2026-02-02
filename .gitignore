@@ -26,3 +26,7 @@ reports/
 data/processed/
 data/raw/
 models/
+
+# Logs
+logs/
+*.log
