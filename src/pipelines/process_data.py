@@ -5,7 +5,7 @@
 Memory-Efficient Data Processing Pipeline for HRP Database
 
 This script transforms the raw HRP database (db/hrp_data.db) into a cleaned
-and processed database (data/processed/hrp_processed.db) suitable for ML modeling.
+and processed database (db/hrp_processed.db) suitable for ML modeling.
 
 Key Features:
 - Chunked processing for large measurements table
@@ -739,7 +739,7 @@ def main():
     script_dir = Path(__file__).parent
     project_root = script_dir.parent.parent
     raw_db_path = project_root / "db" / "hrp_data.db"
-    processed_db_path = project_root / "data" / "processed" / "hrp_processed.db"
+    processed_db_path = project_root / "db" / "hrp_processed.db"
     
     # Create output directory
     processed_db_path.parent.mkdir(parents=True, exist_ok=True)
