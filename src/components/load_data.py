@@ -8,7 +8,7 @@ from pathlib import Path
 import logging
 from typing import Iterable, List, Optional
 from openpyxl import load_workbook
-from src.utils.database import initialize_database, normalize_from_sources, bulk_upsert_seniors
+from src.components.database import initialize_database, normalize_from_sources, bulk_upsert_seniors
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

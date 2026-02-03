@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Tuple, Dict
 
-from .lstm_vae_model import LSTM_VAE
+from ..components.lstm_vae_model import LSTM_VAE
 
 class Config:
     BASE_DIR = Path("data/processed/anomaly_detection")

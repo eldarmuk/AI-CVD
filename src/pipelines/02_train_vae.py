@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Tuple, Optional
 
-from .lstm_vae_model import LSTM_VAE
+from ..components.lstm_vae_model import LSTM_VAE
 
 class Config:
     X_TRAIN = Path("data/processed/anomaly_detection/X_train_anomaly.npy")
