@@ -26,7 +26,7 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-DATA_DIR = Path(__file__).parent.parent / 'data' / 'processed'
+DATA_DIR = Path(__file__).parent.parent.parent / 'data' / 'processed'
 PARQUET_PATH = DATA_DIR / 'multimodal_features.parquet'
 OUTPUT_DIR = DATA_DIR / 'anomaly_detection'
 SEQ_LEN = 96
