@@ -6,7 +6,7 @@ import pandas as pd
 import sqlite3
 from pathlib import Path
 import logging
-from typing import Iterable, List, Optional
+from typing import List, Optional
 from openpyxl import load_workbook
 from src.components.database import initialize_database, normalize_from_sources, bulk_upsert_seniors
 
@@ -206,7 +206,9 @@ def insert_measurements_from_excel(
                         # ingestion_state may not exist on very old DBs
                         pass
 
-                header = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1, values_only=False))]
+                # TODO: Validate header structure
+                # header = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1, values_only=False))]
+                _ = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1, values_only=False))]
                 # Expect first 6 columns: seniorID, value, sbp, dbp, date, type
                 rows_buffer: list[dict] = []
                 processed = 0

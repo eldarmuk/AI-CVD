@@ -10,7 +10,7 @@ from torch.optim import AdamW
 import matplotlib.pyplot as plt
 import random
 try:
-    from sklearn.metrics import average_precision_score, f1_score
+    from sklearn.metrics import f1_score
     _HAS_SKLEARN = True
 except Exception:
     _HAS_SKLEARN = False
@@ -308,10 +308,12 @@ def train_loop(
                 y_trues_flat = np.concatenate(y_trues)
                 y_preds_flat = np.concatenate(y_preds)
                 f1_macro = f1_score(y_trues_flat, y_preds_flat, average="macro", zero_division=0)
-            except: pass
+            except Exception: 
+                pass
 
         scheduler.step(val_loss)
-        current_lr = opt.param_groups[0]['lr']
+        # current_lr = opt.param_groups[0]['lr']
+        _ = opt.param_groups[0]['lr']
 
         # DEBUG PRINT: Show us exactly what classes are being predicted
         print(f"Epoch {epoch:02d}: Train={train_loss:.4f} | Val={val_loss:.4f} | F1={f1_macro:.4f} | Preds={unique_preds}")

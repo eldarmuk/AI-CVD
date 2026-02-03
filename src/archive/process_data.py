@@ -765,10 +765,13 @@ def main():
     
     try:
         # Process tables
-        df_seniors = process_seniors(conn_in, conn_out)
+        # df_seniors = process_seniors(conn_in, conn_out)
+        _ = process_seniors(conn_in, conn_out)
         process_measurements_chunked(conn_in, conn_out)
-        df_alerts = process_alerts(conn_in, conn_out)
-        df_risk_profiles = create_risk_profiles(conn_in, conn_out)
+        # df_alerts = process_alerts(conn_in, conn_out)
+        _ = process_alerts(conn_in, conn_out)
+        # df_risk_profiles = create_risk_profiles(conn_in, conn_out)
+        _ = create_risk_profiles(conn_in, conn_out)
         copy_auxiliary_tables(conn_in, conn_out)
         
         # Final summary
