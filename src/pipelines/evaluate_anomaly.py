@@ -169,7 +169,7 @@ def main():
     ).to(Config.DEVICE)
     
     print(f"+ Loading weights from {Config.PATHS['model']}...")
-    model.load_state_dict(torch.load(Config.PATHS['model'], map_location=Config.DEVICE))
+    model.load_state_dict(torch.load(Config.PATHS['model'], map_location=Config.DEVICE, weights_only=True))
     
     errors = compute_reconstruction_error(model, X_tensor)
     
