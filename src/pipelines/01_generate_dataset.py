@@ -19,6 +19,8 @@ import logging
 from typing import Tuple, List
 import shutil
 
+from ..components.utils import get_feature_columns
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -81,16 +83,6 @@ def split_seniors(df: pd.DataFrame, train_split: float = 0.8) -> Tuple[List, Lis
     logger.info(f"Test seniors: {len(test_seniors):,} ({100*len(test_seniors)/n_seniors:.1f}%)")
     
     return train_seniors, test_seniors
-
-
-def get_feature_columns(df: pd.DataFrame) -> List[str]:
-    """Extract feature columns (exclude metadata)."""
-    exclude_cols = {'senior_id', 'timestamp', 'label_1', 'label_2', 'label_3', 
-                    'hour', 'is_night', 'day_of_week'}
-    feature_cols = [col for col in df.columns if col not in exclude_cols]
-    logger.info(f"Feature columns ({len(feature_cols)}): {feature_cols[:10]}...")
-    return feature_cols
-
 
 def extract_sequences_from_senior(
     df_senior: pd.DataFrame,
