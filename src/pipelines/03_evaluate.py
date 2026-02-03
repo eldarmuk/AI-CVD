@@ -15,8 +15,8 @@ class Config:
     MODEL_DIR = Path("models/lstm_vae")
     
     PATHS = {
-        "X_test": BASE_DIR / "X_test_anomaly.npy",
-        "y_test": BASE_DIR / "y_test_anomaly.npy",
+        "X_test": BASE_DIR / "X_test.npy",
+        "y_test": BASE_DIR / "y_test.npy",
         "stats": BASE_DIR / "normalization_stats.json",
         "model": MODEL_DIR / "best_checkpoint.pt",
         "plots": MODEL_DIR / "metrics"

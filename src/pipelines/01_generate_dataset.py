@@ -33,9 +33,9 @@ TRAIN_SPLIT = 0.8
 RANDOM_SEED = 42
 TRAIN_STRIDE = 12
 
-X_TRAIN_PATH = OUTPUT_DIR / 'X_train_anomaly.npy'
-X_TEST_PATH = OUTPUT_DIR / 'X_test_anomaly.npy'
-Y_TEST_PATH = OUTPUT_DIR / 'y_test_anomaly.npy'
+X_TRAIN_PATH = OUTPUT_DIR / 'X_train.npy'
+X_TEST_PATH = OUTPUT_DIR / 'X_test.npy'
+Y_TEST_PATH = OUTPUT_DIR / 'y_test.npy'
 METADATA_PATH = OUTPUT_DIR / 'anomaly_dataset_metadata.txt'
 
 
@@ -188,7 +188,7 @@ def generate_training_data(df, train_seniors, seq_len, feature_cols):
         os.remove(chunk_path)
     
     chunk_dir.rmdir()
-    logger.info(f"Saved X_train_anomaly.npy ({fp.nbytes / 1e9:.2f} GB)")
+    logger.info(f"Saved X_train.npy ({fp.nbytes / 1e9:.2f} GB)")
     return fp
 
 def generate_testing_data(df, test_seniors, seq_len, feature_cols):
@@ -252,16 +252,16 @@ def save_sequences(X_train: np.ndarray, X_test: np.ndarray, y_test: np.ndarray) 
     
     if isinstance(X_train, np.memmap):
         X_train.flush()
-        logger.info(f"  + Flushed X_train_anomaly.npy (Already saved via memmap): {X_train.shape}")
+        logger.info(f"  + Flushed X_train.npy (Already saved via memmap): {X_train.shape}")
     else:
         np.save(X_TRAIN_PATH, X_train)
-        logger.info(f"  + Saved X_train_anomaly.npy: {X_train.shape}")
+        logger.info(f"  + Saved X_train.npy: {X_train.shape}")
     
     np.save(X_TEST_PATH, X_test)
-    logger.info(f"  + Saved X_test_anomaly.npy: {X_test.shape}")
+    logger.info(f"  + Saved X_test.npy: {X_test.shape}")
     
     np.save(Y_TEST_PATH, y_test)
-    logger.info(f"  + Saved y_test_anomaly.npy: {y_test.shape}")
+    logger.info(f"  + Saved y_test.npy: {y_test.shape}")
 
 def save_metadata(
     X_train: np.ndarray,
