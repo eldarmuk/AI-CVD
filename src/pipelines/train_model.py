@@ -32,7 +32,7 @@ PATHS = {
     "y_val": "data/processed/archive_early_warning_system/sequences/y_val.npy",
     "X_test": "data/processed/archive_early_warning_system/sequences/X_test.npy",
 }
-SAVE_PATH = "models/bi_gru_best.pt"
+SAVE_PATH = "models/archive_early_warning/bi_gru_best.pt"
 SEED = 42
 
 # Multi-class weights (capped for stability)

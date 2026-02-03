@@ -12,14 +12,14 @@ from .lstm_vae_model import LSTM_VAE
 
 class Config:
     BASE_DIR = Path("data/processed/anomaly_detection")
-    MODEL_DIR = Path("models")
+    MODEL_DIR = Path("models/lstm_vae")
     
     PATHS = {
         "X_test": BASE_DIR / "X_test_anomaly.npy",
         "y_test": BASE_DIR / "y_test_anomaly.npy",
         "stats": BASE_DIR / "normalization_stats.json",
-        "model": MODEL_DIR / "lstm_vae_best.pt",
-        "plots": MODEL_DIR / "evaluation_plots"
+        "model": MODEL_DIR / "best_checkpoint.pt",
+        "plots": MODEL_DIR / "metrics"
     }
     
     SEQ_LEN = 96

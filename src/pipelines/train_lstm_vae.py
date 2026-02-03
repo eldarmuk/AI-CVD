@@ -12,7 +12,7 @@ from .lstm_vae_model import LSTM_VAE
 class Config:
     X_TRAIN = Path("data/processed/anomaly_detection/X_train_anomaly.npy")
     STATS_PATH = Path("data/processed/anomaly_detection/normalization_stats.json")
-    MODEL_SAVE = Path("models/lstm_vae_best.pt")
+    MODEL_SAVE = Path("models/lstm_vae/best_checkpoint.pt")
     
     SEQ_LEN = 96
     N_FEATURES = 25
