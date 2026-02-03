@@ -167,7 +167,7 @@ def write_memmap(df, balanced_indices, feature_cols, out_x, out_y):
 def main():
     args = argparse.ArgumentParser()
     args.add_argument("--input", default="data/processed/multimodal_features.parquet")
-    args.add_argument("--out_dir", default="data/processed/sequences")
+    args.add_argument("--out_dir", default="data/processed/archive_early_warning_system/sequences")
     parsed = args.parse_args()
     
     out_dir = Path(parsed.out_dir)
@@ -211,7 +211,7 @@ def main():
     test_final = np.array(test_indices, dtype=object)
     write_memmap(df, test_final, feats, out_dir/"X_test.npy", out_dir/"y_test.npy")
 
-    print("\nDone. Files saved to data/processed/sequences/")
+    print(f"\nDone. Files saved to {out_dir}")
 
 if __name__ == "__main__":
     main()

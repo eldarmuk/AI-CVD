@@ -26,11 +26,11 @@ EPOCHS = 50
 PATIENCE = 8
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 PATHS = {
-    "X_train": "data/processed/sequences/X_train.npy",
-    "y_train": "data/processed/sequences/y_train.npy",
-    "X_val": "data/processed/sequences/X_val.npy",
-    "y_val": "data/processed/sequences/y_val.npy",
-    "X_test": "data/processed/sequences/X_test.npy",
+    "X_train": "data/processed/archive_early_warning_system/sequences/X_train.npy",
+    "y_train": "data/processed/archive_early_warning_system/sequences/y_train.npy",
+    "X_val": "data/processed/archive_early_warning_system/sequences/X_val.npy",
+    "y_val": "data/processed/archive_early_warning_system/sequences/y_val.npy",
+    "X_test": "data/processed/archive_early_warning_system/sequences/X_test.npy",
 }
 SAVE_PATH = "models/bi_gru_best.pt"
 SEED = 42

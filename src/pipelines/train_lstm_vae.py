@@ -10,8 +10,8 @@ from typing import Tuple, Optional
 from .lstm_vae_model import LSTM_VAE
 
 class Config:
-    X_TRAIN = Path("data/processed/sequences/X_train_anomaly.npy")
-    STATS_PATH = Path("data/processed/sequences/normalization_stats.json")
+    X_TRAIN = Path("data/processed/anomaly_detection/X_train_anomaly.npy")
+    STATS_PATH = Path("data/processed/anomaly_detection/normalization_stats.json")
     MODEL_SAVE = Path("models/lstm_vae_best.pt")
     
     SEQ_LEN = 96

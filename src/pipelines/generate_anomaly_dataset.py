@@ -26,7 +26,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).parent.parent / 'data' / 'processed'
 PARQUET_PATH = DATA_DIR / 'multimodal_features.parquet'
-OUTPUT_DIR = DATA_DIR / 'sequences'
+OUTPUT_DIR = DATA_DIR / 'anomaly_detection'
 SEQ_LEN = 96
 STEP_CAP = 2000
 TRAIN_SPLIT = 0.8

@@ -11,7 +11,7 @@ from typing import Tuple, Dict
 from .lstm_vae_model import LSTM_VAE
 
 class Config:
-    BASE_DIR = Path("data/processed/sequences")
+    BASE_DIR = Path("data/processed/anomaly_detection")
     MODEL_DIR = Path("models")
     
     PATHS = {
