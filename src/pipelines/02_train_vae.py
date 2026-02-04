@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -15,12 +16,13 @@ class Config:
     MODEL_SAVE = Path("models/lstm_vae/best_checkpoint.pt")
     
     SEQ_LEN = 96
-    N_FEATURES = 25
+    N_FEATURES = 12
     BATCH_SIZE = 512
     LR = 1e-3
     EPOCHS = 10
     BETA = 0.001  # KL weight (annealing suggested for complex datasets)
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    NUM_WORKERS = 0 if os.name == "nt" else 4
 
 # --- UTILS ---
 def get_normalization_stats(npy_path: Path) -> Tuple[np.ndarray, np.ndarray]:
@@ -129,8 +131,14 @@ def train():
     # Setup Data
     mean, std = get_normalization_stats(Config.X_TRAIN)
     dataset = MmapDataset(Config.X_TRAIN, mean, std)
-    loader = DataLoader(dataset, batch_size=Config.BATCH_SIZE, shuffle=True, 
-                        num_workers=4, pin_memory=True, drop_last=True)
+    loader = DataLoader(
+        dataset,
+        batch_size=Config.BATCH_SIZE,
+        shuffle=True,
+        num_workers=Config.NUM_WORKERS,
+        pin_memory=Config.DEVICE.type == "cuda",
+        drop_last=True,
+    )
     
     print(f"+ Dataset loaded: {len(dataset):,} samples")
 
