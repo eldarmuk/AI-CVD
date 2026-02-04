@@ -1,3 +1,4 @@
+from turtle import pd
 import torch
 import torch.nn as nn
 import numpy as np
@@ -8,10 +9,13 @@ import json
 from pathlib import Path
 from typing import Tuple, Dict
 
+from src.components.utils import get_feature_columns
+
 from ..components.lstm_vae_model import LSTM_VAE
 
 class Config:
     BASE_DIR = Path("data/processed/anomaly_detection")
+    PARQUET_PATH = Path("data/processed/multimodal_features.parquet")
     MODEL_DIR = Path("models/lstm_vae")
     
     PATHS = {
@@ -23,7 +27,8 @@ class Config:
     }
     
     SEQ_LEN = 96
-    N_FEATURES = 25
+    FEATURE_NAMES = get_feature_columns(pd.read_parquet(PARQUET_PATH))
+    N_FEATURES = len(FEATURE_NAMES)
     HIDDEN_DIM = 64
     EMBEDDING_DIM = 32
     BATCH_SIZE = 256

@@ -3,20 +3,24 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
+from pandas import pd
 import json
 import time
 from pathlib import Path
 from typing import Tuple, Optional
 
 from ..components.lstm_vae_model import LSTM_VAE
+from ..components.utils import get_feature_columns
 
 class Config:
     X_TRAIN = Path("data/processed/anomaly_detection/X_train.npy")
     STATS_PATH = Path("data/processed/anomaly_detection/normalization_stats.json")
     MODEL_SAVE = Path("models/lstm_vae/best_checkpoint.pt")
+    PARQUET_PATH = Path("data/processed/multimodal_features.parquet")
     
     SEQ_LEN = 96
-    N_FEATURES = 12
+    FEATURE_NAMES = get_feature_columns(pd.read_parquet(PARQUET_PATH))
+    N_FEATURES = len(FEATURE_NAMES)
     BATCH_SIZE = 512
     LR = 1e-3
     EPOCHS = 10
