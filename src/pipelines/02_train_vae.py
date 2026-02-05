@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
-from pandas import pd
+import pandas as pd
 import json
 import time
 from pathlib import Path

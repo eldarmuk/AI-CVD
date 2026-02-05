@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 import seaborn as sns
 from sklearn.metrics import roc_auc_score, roc_curve, confusion_matrix
 import json
