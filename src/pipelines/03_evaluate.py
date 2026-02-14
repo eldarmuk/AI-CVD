@@ -1,4 +1,5 @@
 from turtle import pd
+from sklearn import metrics
 import torch
 import torch.nn as nn
 import numpy as np
@@ -82,6 +83,27 @@ def compute_reconstruction_error(model: nn.Module, X: torch.Tensor) -> np.ndarra
             errors.extend(loss.cpu().numpy())
             
     return np.array(errors)
+
+def bootstrap_auc_ci(y_true: np.ndarray, scores: np.ndarray,
+                     n_bootstraps: int = 1000,
+                     seed: int = 42):
+    rng = np.random.RandomState(seed)
+    bootstrapped_scores = []
+
+    n = len(y_true)
+
+    for _ in range(n_bootstraps):
+        indices = rng.randint(0, n, n)
+        if len(np.unique(y_true[indices])) < 2:
+            continue
+        score = roc_auc_score(y_true[indices], scores[indices])
+        bootstrapped_scores.append(score)
+
+    sorted_scores = np.sort(bootstrapped_scores)
+    lower = sorted_scores[int(0.025 * len(sorted_scores))]
+    upper = sorted_scores[int(0.975 * len(sorted_scores))]
+
+    return lower, upper
 
 def analyze_thresholds(y_true: np.ndarray, errors: np.ndarray) -> Dict:
     """
@@ -180,10 +202,16 @@ def main():
     errors = compute_reconstruction_error(model, X_tensor)
     
     metrics = analyze_thresholds(y_test, errors)
+
+    ci_lower, ci_upper = bootstrap_auc_ci(y_test, errors)
+
+    metrics["ci_lower"] = ci_lower
+    metrics["ci_upper"] = ci_upper
     
     print("\n" + "="*30)
     print(" FINAL RESULTS")
-    print(f" AUROC:           {metrics['auc']:.4f}")
+    print(f" AUROC: {metrics['auc']:.4f} "
+      f"(95% CI: {metrics['ci_lower']:.4f}–{metrics['ci_upper']:.4f})")
     print(f" Best Threshold:  {metrics['best_threshold']:.4f} (G-Mean: {metrics['gmean']:.4f})")
     print("="*30 + "\n")
     
