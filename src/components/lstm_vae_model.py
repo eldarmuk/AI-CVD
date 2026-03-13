@@ -13,7 +13,7 @@ class LSTM_VAE(nn.Module):
     Note: z is fed to the decoder at every timestep to maintain global context.
     """
     
-    def __init__(self, input_dim: int = 12, sequence_length: int = 96, 
+    def __init__(self, input_dim: int = 11, sequence_length: int = 96, 
                  embedding_dim: int = 32, hidden_dim: int = 64):
         super(LSTM_VAE, self).__init__()
         
@@ -91,7 +91,7 @@ class LSTM_VAE(nn.Module):
 
 def test_run():
     """Simple sanity check for dimensions."""
-    B, L, F_in = 64, 96, 12
+    B, L, F_in = 64, 96, 11
     H, Z_dim = 64, 32
     
     print(f"Initializing model with [B={B}, L={L}, F={F_in}]...")

@@ -2,20 +2,26 @@ import os
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+from sklearn.metrics import roc_auc_score
 import numpy as np
 import pandas as pd
 import json
 import time
 from pathlib import Path
 from typing import Tuple, Optional
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from ..components.lstm_vae_model import LSTM_VAE
 from ..components.utils import get_feature_columns
 
 class Config:
     X_TRAIN = Path("data/processed/anomaly_detection/X_train.npy")
+    X_VAL = Path("data/processed/anomaly_detection/X_val.npy")
+    Y_VAL = Path("data/processed/anomaly_detection/y_val.npy")
     STATS_PATH = Path("data/processed/anomaly_detection/normalization_stats.json")
-    MODEL_SAVE = Path("models/lstm_vae/best_checkpoint.pt")
+    MODEL_SAVE_DIR = Path("models/lstm_vae")
+    BEST_MODEL_PATH = MODEL_SAVE_DIR / "best_checkpoint.pt"
+    VAL_METRICS_PATH = MODEL_SAVE_DIR / "validation_metrics.json"
     PARQUET_PATH = Path("data/processed/multimodal_features.parquet")
     
     SEQ_LEN = 96
@@ -23,8 +29,9 @@ class Config:
     N_FEATURES = len(FEATURE_NAMES)
     BATCH_SIZE = 512
     LR = 1e-3
-    EPOCHS = 10
+    EPOCHS = 20
     BETA = 0.001  # KL weight (annealing suggested for complex datasets)
+    PATIENCE = 5
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     NUM_WORKERS = 0 if os.name == "nt" else 4
 
@@ -81,15 +88,18 @@ def get_normalization_stats(npy_path: Path) -> Tuple[np.ndarray, np.ndarray]:
     return mean.astype(np.float32), std.astype(np.float32)
 
 # --- DATASET ---
-class MmapDataset(Dataset):
-    def __init__(self, npy_path: Path, mean: np.ndarray, std: np.ndarray, label_path: Optional[Path] = None):
-        self.data = np.memmap(npy_path, dtype='float32', mode='r')
-        n_samples = self.data.shape[0] // (Config.SEQ_LEN * Config.N_FEATURES)
-        self.data = self.data.reshape(n_samples, Config.SEQ_LEN, Config.N_FEATURES)
+class NumpyDataset(Dataset):
+    def __init__(self, data, mean: np.ndarray, std: np.ndarray, labels: Optional[np.ndarray] = None):
+        if isinstance(data, Path):
+            self.data = np.memmap(data, dtype='float32', mode='r')
+            n_samples = self.data.shape[0] // (Config.SEQ_LEN * Config.N_FEATURES)
+            self.data = self.data.reshape(n_samples, Config.SEQ_LEN, Config.N_FEATURES)
+        else:
+            self.data = data
         
         self.mean = torch.from_numpy(mean)
         self.std = torch.from_numpy(std)
-        self.labels = np.load(label_path) if label_path else None
+        self.labels = labels
 
     def __len__(self):
         return self.data.shape[0]
@@ -128,15 +138,68 @@ def vae_loss(recon_x, x, mu, logvar, beta=1.0):
     
     return recon_loss + (beta * kld), recon_loss, kld
 
+
+def validate(model, val_loader, device, beta):
+    model.eval()
+    total_loss = 0.0
+    total_recon = 0.0
+    total_kl = 0.0
+    all_errors = []
+    all_labels = []
+
+    with torch.no_grad():
+        for x, y in val_loader:
+            x = x.to(device)
+
+            recon_x, mu, logvar, _ = model(x)
+            loss, recon, kl = vae_loss(recon_x, x, mu, logvar, beta)
+
+            total_loss += loss.item()
+            total_recon += recon.item()
+            total_kl += kl.item()
+
+            errors = torch.mean((x - recon_x) ** 2, dim=[1, 2])
+            all_errors.extend(errors.cpu().numpy())
+            all_labels.extend(y.numpy())
+
+    n_batches = len(val_loader)
+    return {
+        'loss': total_loss / n_batches,
+        'recon': total_recon / n_batches,
+        'kl': total_kl / n_batches,
+        'errors': np.array(all_errors),
+        'labels': np.array(all_labels)
+    }
+
+
+def find_optimal_threshold(errors, labels):
+    from sklearn.metrics import roc_curve
+
+    fpr, tpr, thresholds = roc_curve(labels, errors)
+    gmeans = np.sqrt(tpr * (1 - fpr))
+    ix = np.argmax(gmeans)
+
+    return {
+        'threshold': float(thresholds[ix]),
+        'gmean': float(gmeans[ix]),
+        'tpr': float(tpr[ix]),
+        'fpr': float(fpr[ix])
+    }
+
+
+def get_beta(epoch, max_epochs=20, beta_max=0.001):
+    """Gradually increase KL weight from 0 to beta_max."""
+    return min(beta_max, beta_max * (epoch / (max_epochs * 0.5)))
+
 # --- TRAINING ---
 def train():
     print(f"Starting training on {Config.DEVICE}")
     
     # Setup Data
     mean, std = get_normalization_stats(Config.X_TRAIN)
-    dataset = MmapDataset(Config.X_TRAIN, mean, std)
-    loader = DataLoader(
-        dataset,
+    train_dataset = NumpyDataset(Config.X_TRAIN, mean, std)
+    train_loader = DataLoader(
+        train_dataset,
         batch_size=Config.BATCH_SIZE,
         shuffle=True,
         num_workers=Config.NUM_WORKERS,
@@ -144,7 +207,21 @@ def train():
         drop_last=True,
     )
     
-    print(f"+ Dataset loaded: {len(dataset):,} samples")
+    X_val = np.load(Config.X_VAL)
+    y_val = np.load(Config.Y_VAL)
+    val_dataset = NumpyDataset(X_val, mean, std, labels=y_val)
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=Config.BATCH_SIZE,
+        shuffle=False,
+        num_workers=Config.NUM_WORKERS,
+        pin_memory=Config.DEVICE.type == "cuda",
+    )
+    
+    print(f"+ Train dataset: {len(train_dataset):,} samples")
+    print(f"+ Val dataset: {len(val_dataset):,} samples")
+    print(f"  Anomalies: {np.sum(y_val):,}")
+    print(f"  Normal: {len(y_val) - np.sum(y_val):,}")
 
     # Setup Model
     model = LSTM_VAE(
@@ -154,23 +231,31 @@ def train():
     ).to(Config.DEVICE)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=Config.LR)
+    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3, verbose=True)
     
-    Config.MODEL_SAVE.parent.mkdir(parents=True, exist_ok=True)
+    Config.MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
     
 
     # Training Loop
+    best_val_loss = float('inf')
+    best_val_auc = 0.0
+    patience_counter = 0
+    best_threshold = None
+
     for epoch in range(Config.EPOCHS):
         model.train()
         start_time = time.time()
         metrics = {'loss': 0.0, 'recon': 0.0, 'kl': 0.0}
-        
-        for batch_idx, (x, _) in enumerate(loader):
+
+        current_beta = get_beta(epoch, Config.EPOCHS, Config.BETA)
+
+        for batch_idx, (x, _) in enumerate(train_loader):
             x = x.to(Config.DEVICE)
             
             # Optimization
             optimizer.zero_grad()
             recon_x, mu, logvar, _ = model(x)
-            loss, recon, kl = vae_loss(recon_x, x, mu, logvar, beta=Config.BETA)
+            loss, recon, kl = vae_loss(recon_x, x, mu, logvar, beta=current_beta)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
@@ -181,15 +266,59 @@ def train():
             metrics['kl'] += kl.item()
             
             if batch_idx % 100 == 0 and batch_idx > 0:
-                print(f"  Batch {batch_idx}/{len(loader)} | "
+                print(f"  Batch {batch_idx}/{len(train_loader)} | "
                       f"Loss: {loss.item():.4f} (Recon: {recon.item():.4f} KL: {kl.item():.4f})")
 
+        # Validation
+        val_metrics = validate(model, val_loader, Config.DEVICE, current_beta)
+        threshold_info = find_optimal_threshold(val_metrics['errors'], val_metrics['labels'])
+
+        val_auc = roc_auc_score(val_metrics['labels'], val_metrics['errors'])
+
         # Epoch Summary
-        avg_loss = metrics['loss'] / len(loader)
+        avg_loss = metrics['loss'] / len(train_loader)
         duration = time.time() - start_time
-        print(f"Epoch {epoch+1}/{Config.EPOCHS} | {duration:.1f}s | Avg Loss: {avg_loss:.4f}")
-        
-        torch.save(model.state_dict(), Config.MODEL_SAVE)
+        print(f"Epoch {epoch+1}/{Config.EPOCHS} | {duration:.1f}s | Beta: {current_beta:.6f}")
+        print(f"  Train Loss: {avg_loss:.4f}")
+        print(f"  Val Loss: {val_metrics['loss']:.4f} (Recon: {val_metrics['recon']:.4f}, KL: {val_metrics['kl']:.4f})")
+        print(f"  Val AUROC: {val_auc:.4f}")
+        print(f"  Val Threshold: {threshold_info['threshold']:.4f} (G-Mean: {threshold_info['gmean']:.4f})")
+
+        scheduler.step(val_auc)
+
+        if val_metrics['loss'] < best_val_loss:
+            best_val_loss = val_metrics['loss']
+            best_threshold = threshold_info
+            patience_counter = 0
+
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_loss': val_metrics['loss'],
+                'val_auc': val_auc,
+                'threshold': threshold_info['threshold'],
+            }, Config.BEST_MODEL_PATH)
+
+            print(f"  ✓ Saved best model (val_loss: {best_val_loss:.4f})")
+        else:
+            patience_counter += 1
+            print(f"  Patience: {patience_counter}/{Config.PATIENCE}")
+
+            if patience_counter >= Config.PATIENCE:
+                print(f"\nEarly stopping triggered at epoch {epoch+1}")
+                break
+
+        print()
+
+    val_metrics_data = {
+        'best_val_loss': float(best_val_loss),
+        'best_threshold': best_threshold,
+        'note': 'Threshold selected on VALIDATION set, will be applied to TEST set'
+    }
+
+    with open(Config.VAL_METRICS_PATH, 'w') as f:
+        json.dump(val_metrics_data, f, indent=2)
 
 if __name__ == "__main__":
     train()

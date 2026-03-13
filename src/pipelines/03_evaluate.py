@@ -1,4 +1,3 @@
-from turtle import pd
 from sklearn import metrics
 import torch
 import torch.nn as nn
@@ -21,10 +20,13 @@ class Config:
     MODEL_DIR = Path("models/lstm_vae")
     
     PATHS = {
+        "X_val": BASE_DIR / "X_val.npy",
+        "y_val": BASE_DIR / "y_val.npy",
         "X_test": BASE_DIR / "X_test.npy",
         "y_test": BASE_DIR / "y_test.npy",
         "stats": BASE_DIR / "normalization_stats.json",
         "model": MODEL_DIR / "best_checkpoint.pt",
+        "val_metrics": MODEL_DIR / "validation_metrics.json",
         "plots": MODEL_DIR / "metrics"
     }
     
@@ -38,21 +40,23 @@ class Config:
 
 Config.PATHS['plots'].mkdir(parents=True, exist_ok=True)
 
-def load_and_preprocess() -> Tuple[torch.Tensor, np.ndarray]:
+def load_and_preprocess(split: str) -> Tuple[torch.Tensor, np.ndarray]:
     """
-    Loads test data and applies the robust normalization logic used in training.
+    Loads split data and applies the robust normalization logic used in training.
     """
-    print(f"+ Loading data from {Config.PATHS['X_test']}...")
+    x_key = f"X_{split}"
+    y_key = f"y_{split}"
+    print(f"+ Loading data from {Config.PATHS[x_key]}...")
     
     with open(Config.PATHS['stats'], 'r') as f:
         stats = json.load(f)
         mean = torch.tensor(stats['mean']).to(Config.DEVICE)
         std = torch.tensor(stats['std']).to(Config.DEVICE)
     
-    X_test = np.load(Config.PATHS['X_test'])
-    y_test = np.load(Config.PATHS['y_test'])
+    X_data = np.load(Config.PATHS[x_key])
+    y_data = np.load(Config.PATHS[y_key])
     
-    X = torch.from_numpy(X_test).float().to(Config.DEVICE)
+    X = torch.from_numpy(X_data).float().to(Config.DEVICE)
     
     nan_mask = torch.isnan(X)
     mean_expanded = mean.view(1, 1, -1).expand_as(X)
@@ -61,10 +65,10 @@ def load_and_preprocess() -> Tuple[torch.Tensor, np.ndarray]:
     std_expanded = std.view(1, 1, -1).expand_as(X)
     X = (X - mean_expanded) / std_expanded
     
-    print(f"  > Test Shape: {X.shape}")
-    print(f"  > Class Balance: {np.unique(y_test, return_counts=True)}")
+    print(f"  > {split.capitalize()} Shape: {X.shape}")
+    print(f"  > Class Balance: {np.unique(y_data, return_counts=True)}")
     
-    return X, y_test
+    return X, y_data
 
 def compute_reconstruction_error(model: nn.Module, X: torch.Tensor) -> np.ndarray:
     """
@@ -126,7 +130,7 @@ def analyze_thresholds(y_true: np.ndarray, errors: np.ndarray) -> Dict:
         "tpr": tpr
     }
 
-def save_plots(y_true, errors, metrics: Dict):
+def save_plots(y_true, errors, metrics: Dict, split_label: str = "test"):
     """
     Generates and saves publication-quality evaluation figures.
     """
@@ -141,7 +145,7 @@ def save_plots(y_true, errors, metrics: Dict):
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
     plt.legend()
-    plt.savefig(Config.PATHS['plots'] / "roc_curve.png", dpi=300)
+    plt.savefig(Config.PATHS['plots'] / f"roc_curve_{split_label}.png", dpi=300)
     plt.close()
 
     # 2. Error Distribution (Log Scale)
@@ -155,7 +159,7 @@ def save_plots(y_true, errors, metrics: Dict):
     plt.title(f"Reconstruction Error (Log Scale) | AUC={metrics['auc']:.3f}")
     plt.xlabel("Log(MSE Loss)")
     plt.legend()
-    plt.savefig(Config.PATHS['plots'] / "dist_log.png", dpi=300)
+    plt.savefig(Config.PATHS['plots'] / f"dist_log_{split_label}.png", dpi=300)
     plt.close()
 
     # 3. Zoomed Error Distribution (Linear Scale)
@@ -169,7 +173,7 @@ def save_plots(y_true, errors, metrics: Dict):
     plt.title("Reconstruction Error Separation (Linear Scale)")
     plt.xlabel("MSE Loss")
     plt.legend()
-    plt.savefig(Config.PATHS['plots'] / "dist_zoomed.png", dpi=300)
+    plt.savefig(Config.PATHS['plots'] / f"dist_zoomed_{split_label}.png", dpi=300)
     plt.close()
 
     # 3. Confusion Matrix
@@ -181,14 +185,15 @@ def save_plots(y_true, errors, metrics: Dict):
                 xticklabels=['Pred Normal', 'Pred Anomaly'],
                 yticklabels=['True Normal', 'True Anomaly'])
     plt.title(f"Confusion Matrix @ Threshold {best_thresh:.4f}")
-    plt.savefig(Config.PATHS['plots'] / "confusion_matrix.png", dpi=300)
+    plt.savefig(Config.PATHS['plots'] / f"confusion_matrix_{split_label}.png", dpi=300)
     plt.close()
     
     print(f"+ Plots saved to {Config.PATHS['plots']}")
 
 def main():
     print(f"Device: {Config.DEVICE}")
-    X_tensor, y_test = load_and_preprocess()
+    X_val_tensor, y_val = load_and_preprocess("val")
+    X_test_tensor, y_test = load_and_preprocess("test")
     
     model = LSTM_VAE(
         input_dim=Config.N_FEATURES, 
@@ -197,25 +202,35 @@ def main():
     ).to(Config.DEVICE)
     
     print(f"+ Loading weights from {Config.PATHS['model']}...")
-    model.load_state_dict(torch.load(Config.PATHS['model'], map_location=Config.DEVICE, weights_only=True))
-    
-    errors = compute_reconstruction_error(model, X_tensor)
-    
-    metrics = analyze_thresholds(y_test, errors)
+    checkpoint = torch.load(Config.PATHS['model'], map_location=Config.DEVICE, weights_only=True)
+    model.load_state_dict(checkpoint['model_state_dict'])
 
-    ci_lower, ci_upper = bootstrap_auc_ci(y_test, errors)
+    val_errors = compute_reconstruction_error(model, X_val_tensor)
+    test_errors = compute_reconstruction_error(model, X_test_tensor)
 
-    metrics["ci_lower"] = ci_lower
-    metrics["ci_upper"] = ci_upper
-    
+    if Config.PATHS['val_metrics'].exists():
+        with open(Config.PATHS['val_metrics'], 'r') as f:
+            val_metrics = json.load(f)
+        threshold = float(val_metrics.get("best_threshold", {}).get("threshold", val_metrics.get("best_threshold", 0.0)))
+    else:
+        threshold_info = analyze_thresholds(y_val, val_errors)
+        threshold = float(threshold_info["best_threshold"])
+
+    test_metrics = analyze_thresholds(y_test, test_errors)
+    test_metrics["best_threshold"] = threshold
+
+    ci_lower, ci_upper = bootstrap_auc_ci(y_test, test_errors)
+    test_metrics["ci_lower"] = ci_lower
+    test_metrics["ci_upper"] = ci_upper
+
     print("\n" + "="*30)
-    print(" FINAL RESULTS")
-    print(f" AUROC: {metrics['auc']:.4f} "
-      f"(95% CI: {metrics['ci_lower']:.4f}–{metrics['ci_upper']:.4f})")
-    print(f" Best Threshold:  {metrics['best_threshold']:.4f} (G-Mean: {metrics['gmean']:.4f})")
+    print(" FINAL RESULTS (TEST)")
+    print(f" AUROC: {test_metrics['auc']:.4f} "
+          f"(95% CI: {test_metrics['ci_lower']:.4f}–{test_metrics['ci_upper']:.4f})")
+    print(f" Threshold (from VAL): {threshold:.4f}")
     print("="*30 + "\n")
-    
-    save_plots(y_test, errors, metrics)
+
+    save_plots(y_test, test_errors, test_metrics, split_label="test")
 
 if __name__ == "__main__":
     main()

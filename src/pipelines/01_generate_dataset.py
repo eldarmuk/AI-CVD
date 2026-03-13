@@ -4,10 +4,10 @@ Phase 3 (Revision) - Anomaly Detection Dataset Generation
 Generates sequences for unsupervised anomaly detection from multimodal_features.parquet.
 
 Key Features:
-- Splits seniors 80/20 (Train/Test)
+- Splits seniors 70/15/15 (Train/Val/Test)
 - Training data: Only "Normal" windows (label_1=0, label_2=0, label_3=0)
-- Test data: 50% Anomaly windows (label_3=1) + 50% Normal windows
-- Preserves senior integrity (no mixing train/test seniors)
+- Val/Test data: 50% Anomaly windows (label_3=1) + 50% Normal windows
+- Preserves senior integrity (no mixing train/val/test seniors)
 """
 
 import os
@@ -31,12 +31,13 @@ PARQUET_PATH = DATA_DIR / 'multimodal_features.parquet'
 OUTPUT_DIR = DATA_DIR / 'anomaly_detection'
 SEQ_LEN = 96
 STEP_CAP = 2000
-TRAIN_SPLIT = 0.8
 RANDOM_SEED = 42
-TRAIN_STRIDE = 12
+TRAIN_STRIDE = 11
 
 X_TRAIN_PATH = OUTPUT_DIR / 'X_train.npy'
+X_VAL_PATH = OUTPUT_DIR / 'X_val.npy'
 X_TEST_PATH = OUTPUT_DIR / 'X_test.npy'
+Y_VAL_PATH = OUTPUT_DIR / 'y_val.npy'
 Y_TEST_PATH = OUTPUT_DIR / 'y_test.npy'
 METADATA_PATH = OUTPUT_DIR / 'anomaly_dataset_metadata.txt'
 
@@ -61,28 +62,25 @@ def load_and_clean_data(parquet_path: Path) -> pd.DataFrame:
     logger.info(f"Cleaned shape: {df.shape}")
     return df
 
-def split_seniors(df: pd.DataFrame, train_split: float = 0.8) -> Tuple[List, List]:
-    """
-    Split unique senior_ids into Train and Test sets.
-    Ensures no senior appears in both sets.
-    """
+def split_seniors(df: pd.DataFrame) -> Tuple[List, List, List]:
+    """Split 70/15/15 for train/val/test."""
     unique_seniors = df['senior_id'].unique()
     n_seniors = len(unique_seniors)
     
-    logger.info(f"Total unique seniors: {n_seniors:,}")
-    
     random.seed(RANDOM_SEED)
-    shuffled_seniors = list(unique_seniors)
-    random.shuffle(shuffled_seniors)
+    shuffled = list(unique_seniors)
+    random.shuffle(shuffled)
     
-    split_idx = int(n_seniors * train_split)
-    train_seniors = shuffled_seniors[:split_idx]
-    test_seniors = shuffled_seniors[split_idx:]
+    train_idx = int(n_seniors * 0.70)
+    val_idx = int(n_seniors * 0.85)
     
-    logger.info(f"Train seniors: {len(train_seniors):,} ({100*len(train_seniors)/n_seniors:.1f}%)")
-    logger.info(f"Test seniors: {len(test_seniors):,} ({100*len(test_seniors)/n_seniors:.1f}%)")
+    train_seniors = shuffled[:train_idx]
+    val_seniors = shuffled[train_idx:val_idx]
+    test_seniors = shuffled[val_idx:]
     
-    return train_seniors, test_seniors
+    logger.info(f"Train: {len(train_seniors)}, Val: {len(val_seniors)}, Test: {len(test_seniors)}")
+    
+    return train_seniors, val_seniors, test_seniors
 
 def extract_sequences_from_senior(
     df_senior: pd.DataFrame,
@@ -183,8 +181,8 @@ def generate_training_data(df, train_seniors, seq_len, feature_cols):
     logger.info(f"Saved X_train.npy ({fp.nbytes / 1e9:.2f} GB)")
     return fp
 
-def generate_testing_data(df, test_seniors, seq_len, feature_cols):
-    logger.info("Generating TESTING data...")
+def generate_testing_data(df, test_seniors, seq_len, feature_cols, split_label: str = "TEST"):
+    logger.info(f"Generating {split_label} data...")
     
     test_df = df[df['senior_id'].isin(test_seniors)].copy().reset_index(drop=True)
     pos_windows = []
@@ -237,7 +235,13 @@ def generate_testing_data(df, test_seniors, seq_len, feature_cols):
     return X[idx], y[idx]
 
 
-def save_sequences(X_train: np.ndarray, X_test: np.ndarray, y_test: np.ndarray) -> None:
+def save_sequences(
+    X_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    X_test: np.ndarray,
+    y_test: np.ndarray
+) -> None:
     logger.info(f"\nSaving sequences to {OUTPUT_DIR}...")
     
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -249,30 +253,39 @@ def save_sequences(X_train: np.ndarray, X_test: np.ndarray, y_test: np.ndarray) 
         np.save(X_TRAIN_PATH, X_train)
         logger.info(f"  + Saved X_train.npy: {X_train.shape}")
     
+    np.save(X_VAL_PATH, X_val)
+    logger.info(f"  + Saved X_val.npy: {X_val.shape}")
     np.save(X_TEST_PATH, X_test)
     logger.info(f"  + Saved X_test.npy: {X_test.shape}")
     
+    np.save(Y_VAL_PATH, y_val)
+    logger.info(f"  + Saved y_val.npy: {y_val.shape}")
     np.save(Y_TEST_PATH, y_test)
     logger.info(f"  + Saved y_test.npy: {y_test.shape}")
 
 def save_metadata(
     X_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
     X_test: np.ndarray,
     y_test: np.ndarray,
     n_train_seniors: int,
+    n_val_seniors: int,
     n_test_seniors: int,
     feature_cols: List[str]
 ) -> None:
-    n_anomalies = np.sum(y_test)
-    n_normal = len(y_test) - n_anomalies
+    n_val_anomalies = np.sum(y_val)
+    n_val_normal = len(y_val) - n_val_anomalies
+    n_test_anomalies = np.sum(y_test)
+    n_test_normal = len(y_test) - n_test_anomalies
     
     metadata = f"""Anomaly Detection Dataset
 
 Configuration:
   Sequence length: {SEQ_LEN}
   Step cap: {STEP_CAP}
-  Train/Test split: {100*TRAIN_SPLIT:.0f}/{100*(1-TRAIN_SPLIT):.0f}
   Train seniors: {n_train_seniors:,}
+    Val seniors: {n_val_seniors:,}
   Test seniors: {n_test_seniors:,}
 
 Training Data:
@@ -282,8 +295,13 @@ Training Data:
 
 Testing Data:
   Shape: {X_test.shape}
-  Anomalies: {n_anomalies:,}
-  Normal: {n_normal:,}
+    Anomalies: {n_test_anomalies:,}
+    Normal: {n_test_normal:,}
+
+Validation Data:
+    Shape: {X_val.shape}
+    Anomalies: {n_val_anomalies:,}
+    Normal: {n_val_normal:,}
 
 Features: {len(feature_cols)}
 """
@@ -300,21 +318,36 @@ def main():
     logger.info("=" * 100)
     
     df = load_and_clean_data(PARQUET_PATH)
-    train_seniors, test_seniors = split_seniors(df, TRAIN_SPLIT)
+    train_seniors, val_seniors, test_seniors = split_seniors(df)
     feature_cols = get_feature_columns(df)
     X_train = generate_training_data(df, train_seniors, SEQ_LEN, feature_cols)
-    X_test, y_test = generate_testing_data(df, test_seniors, SEQ_LEN, feature_cols)
+    X_val, y_val = generate_testing_data(df, val_seniors, SEQ_LEN, feature_cols, split_label="VALIDATION")
+    X_test, y_test = generate_testing_data(df, test_seniors, SEQ_LEN, feature_cols, split_label="TEST")
     
     if len(X_train) == 0:
         logger.error("Training data is empty! Aborting.")
         return
     
+    if len(X_val) == 0:
+        logger.error("Validation data is empty! Aborting.")
+        return
+
     if len(X_test) == 0:
         logger.error("Test data is empty! Aborting.")
         return
     
-    save_sequences(X_train, X_test, y_test)
-    save_metadata(X_train, X_test, y_test, len(train_seniors), len(test_seniors), feature_cols)
+    save_sequences(X_train, X_val, y_val, X_test, y_test)
+    save_metadata(
+        X_train,
+        X_val,
+        y_val,
+        X_test,
+        y_test,
+        len(train_seniors),
+        len(val_seniors),
+        len(test_seniors),
+        feature_cols
+    )
     
     logger.info("\n" + "=" * 100)
     logger.info("DATASET GENERATION COMPLETE")

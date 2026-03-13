@@ -1,37 +1,44 @@
+"""
+FIXED Comparison Script for Paper (No Pickle Errors)
+
+Changes:
+1. All np.load() calls use allow_pickle=True to avoid Windows pickle errors
+2. Removed LaTeX table printing (keeping only console output and PDFs)
+3. All models use proper train/val/test splits
+4. Thresholds selected on validation, applied to test
+"""
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_precision_score, precision_score, recall_score, roc_auc_score
-import xgboost as xgb
+from sklearn.metrics import roc_curve, auc, precision_recall_curve, roc_auc_score
 from pathlib import Path
 import json
 import pandas as pd
-import warnings
-import seaborn as sns 
+import seaborn as sns
 
-
-# Use a clean style for scientific plots
 plt.style.use('seaborn-v0_8-whitegrid')
-warnings.filterwarnings('ignore')
 
 # --- CONFIG ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BASE_DIR = Path(".")
+X_TRAIN_PATH = BASE_DIR / "data/processed/anomaly_detection/X_train.npy"
+X_VAL_PATH = BASE_DIR / "data/processed/anomaly_detection/X_val.npy"
+Y_VAL_PATH = BASE_DIR / "data/processed/anomaly_detection/y_val.npy"
 X_TEST_PATH = BASE_DIR / "data/processed/anomaly_detection/X_test.npy"
 Y_TEST_PATH = BASE_DIR / "data/processed/anomaly_detection/y_test.npy"
-X_TRAIN_PATH = BASE_DIR / "data/processed/anomaly_detection/X_train.npy"
 STATS_PATH = BASE_DIR / "data/processed/anomaly_detection/normalization_stats.json"
+LSTM_VAE_CHECKPOINT = BASE_DIR / "models/lstm_vae/best_checkpoint.pt"
+VAL_METRICS_PATH = BASE_DIR / "models/lstm_vae/validation_metrics.json"
 RESULTS_DIR = BASE_DIR / "models/lstm_vae/paper_figures"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-N_FEW_SHOT = 15  # Scarcity Constraint
-
 # --- MODEL DEFINITIONS ---
 class LSTM_VAE(nn.Module):
-    def __init__(self, input_dim=12, seq_len=96, embed_dim=32, hidden_dim=64):
+    def __init__(self, input_dim=11, seq_len=96, embed_dim=32, hidden_dim=64):
         super(LSTM_VAE, self).__init__()
         self.encoder_lstm = nn.LSTM(input_dim, hidden_dim, batch_first=True)
         self.fc_mu = nn.Linear(hidden_dim, embed_dim)
@@ -44,17 +51,14 @@ class LSTM_VAE(nn.Module):
 
     def encode(self, x):
         _, (hidden, _) = self.encoder_lstm(x)
-        hidden = hidden.squeeze(0)
-        return self.fc_mu(hidden), self.fc_logvar(hidden)
+        return self.fc_mu(hidden.squeeze(0)), self.fc_logvar(hidden.squeeze(0))
 
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
+        return mu + std * torch.randn_like(std)
 
     def decode(self, z):
-        batch_size = z.size(0)
-        device = z.device
+        batch_size, device = z.size(0), z.device
         hidden_proj = self.fc_decoder_input(z)
         h0 = hidden_proj.unsqueeze(0)
         c0 = torch.zeros(1, batch_size, self.hidden_dim, device=device)
@@ -65,311 +69,406 @@ class LSTM_VAE(nn.Module):
     def forward(self, x):
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
-        recon_x = self.decode(z)
-        return recon_x, mu, logvar, z
+        return self.decode(z), mu, logvar, z
 
-class CVAE(nn.Module):
-    """Conditional VAE: Conditions on 'Static' Summary Stats of the window"""
-    def __init__(self, input_dim=12, cond_dim=24, seq_len=96, embed_dim=32, hidden_dim=64):
-        super(CVAE, self).__init__()
-        self.seq_len = seq_len
-        self.hidden_dim = hidden_dim
-        # Encoder takes X + Condition
-        self.encoder_lstm = nn.LSTM(input_dim + cond_dim, hidden_dim, batch_first=True)
-        self.fc_mu = nn.Linear(hidden_dim, embed_dim)
-        self.fc_logvar = nn.Linear(hidden_dim, embed_dim)
-        # Decoder takes Z + Condition
-        self.fc_decoder_input = nn.Linear(embed_dim + cond_dim, hidden_dim)
-        self.decoder_lstm = nn.LSTM(hidden_dim, hidden_dim, batch_first=True)
-        self.fc_output = nn.Linear(hidden_dim, input_dim)
-
-    def encode(self, x, c):
-        # Repeat condition for every step: (Batch, Seq, Cond)
-        c_expanded = c.unsqueeze(1).repeat(1, self.seq_len, 1)
-        x_cat = torch.cat([x, c_expanded], dim=2)
-        _, (hidden, _) = self.encoder_lstm(x_cat)
-        hidden = hidden.squeeze(0)
-        return self.fc_mu(hidden), self.fc_logvar(hidden)
-
-    def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
-
-    def decode(self, z, c):
-        batch_size = z.size(0)
-        device = z.device
-        z_cat = torch.cat([z, c], dim=1)
-        hidden_proj = self.fc_decoder_input(z_cat)
-        h0 = hidden_proj.unsqueeze(0)
-        c0 = torch.zeros(1, batch_size, self.hidden_dim, device=device)
-        decoder_input = hidden_proj.unsqueeze(1).repeat(1, self.seq_len, 1)
-        out, _ = self.decoder_lstm(decoder_input, (h0, c0))
-        return self.fc_output(out)
-
-    def forward(self, x, c):
-        mu, logvar = self.encode(x, c)
-        z = self.reparameterize(mu, logvar)
-        recon_x = self.decode(z, c)
-        return recon_x, mu, logvar, z
-
-class BiGRUClassifier(nn.Module):
-    def __init__(self, input_dim=12, hidden_dim=64):
-        super(BiGRUClassifier, self).__init__()
-        self.gru = nn.GRU(input_dim, hidden_dim, batch_first=True, bidirectional=True)
-        self.fc = nn.Linear(hidden_dim * 2, 1)
-        self.sigmoid = nn.Sigmoid()
-    def forward(self, x):
-        out, _ = self.gru(x)
-        return self.sigmoid(self.fc(out[:, -1, :]))
 
 class StandardAE(nn.Module):
-    def __init__(self, input_dim=12*96):
+    """Non-temporal baseline: Standard dense autoencoder."""
+    def __init__(self, seq_len=96, input_dim=11):
         super(StandardAE, self).__init__()
-        self.encoder = nn.Sequential(nn.Linear(input_dim, 128), nn.ReLU(), nn.Linear(128, 32))
-        self.decoder = nn.Sequential(nn.Linear(32, 128), nn.ReLU(), nn.Linear(128, input_dim))
+        flat_dim = seq_len * input_dim
+        self.encoder = nn.Sequential(
+            nn.Linear(flat_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, 64),
+            nn.ReLU(),
+            nn.Linear(64, 32)
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(32, 64),
+            nn.ReLU(),
+            nn.Linear(64, 256),
+            nn.ReLU(),
+            nn.Linear(256, flat_dim)
+        )
+        self.seq_len = seq_len
+        self.input_dim = input_dim
+    
     def forward(self, x):
-        return self.decoder(self.encoder(x.view(x.size(0), -1))).view(x.shape)
+        batch_size = x.size(0)
+        flat = x.view(batch_size, -1)
+        encoded = self.encoder(flat)
+        decoded = self.decoder(encoded)
+        return decoded.view(batch_size, self.seq_len, self.input_dim)
 
 # --- UTILS ---
-def get_metrics(y_true, y_scores, model_name):
-    fpr, tpr, _ = roc_curve(y_true, y_scores)
-    roc_auc = auc(fpr, tpr)
-    precision, recall, thresholds = precision_recall_curve(y_true, y_scores)
-    pr_auc = average_precision_score(y_true, y_scores)
-    f1_scores = 2 * (precision * recall) / (precision + recall + 1e-8)
-    best_idx = np.argmax(f1_scores)
-    best_thresh = thresholds[best_idx] if best_idx < len(thresholds) else 0.5
-    y_pred = (y_scores >= best_thresh).astype(int)
-    # return {
-    #     "Model": model_name, "AUROC": roc_auc, "AUPRC": pr_auc,
-    #     "Precision": precision_score(y_true, y_pred, zero_division=0),
-    #     "Recall": recall_score(y_true, y_pred, zero_division=0),
-    #     "FPR": fpr, "TPR": tpr, "PrecCurve": precision, "RecCurve": recall, "Scores": y_scores
-    # }
-    ci_lower, ci_upper = bootstrap_auc_ci(y_true, y_scores)
+def load_and_normalize_data(data_path, labels_path=None):
+    """
+    Load and normalize data using EXACT SAME normalization as training/evaluation.
+    
+    CRITICAL: Must match the normalization in training script exactly!
+    """
+    with open(STATS_PATH, 'r') as f:
+        stats = json.load(f)
+        mean = torch.tensor(stats['mean'], dtype=torch.float32).to(DEVICE)
+        std = torch.tensor(stats['std'], dtype=torch.float32).to(DEVICE)  # NO +1e-6!
 
-    return {
-        "Model": model_name,
-        "AUROC": roc_auc,
-        "AUROC_CI_L": ci_lower,
-        "AUROC_CI_U": ci_upper,
-        "AUPRC": pr_auc,
-        "Precision": precision_score(y_true, y_pred, zero_division=0),
-        "Recall": recall_score(y_true, y_pred, zero_division=0),
-        "FPR": fpr,
-        "TPR": tpr,
-        "PrecCurve": precision,
-        "RecCurve": recall,
-        "Scores": y_scores
-    }
+    # Detect file type
+    with open(data_path, "rb") as f:
+        magic = f.read(6)
+
+    if magic.startswith(b"\x93NUMPY"):
+        X = np.load(data_path, allow_pickle=True)
+    else:
+        # Raw memmap (train)
+        seq_len = 96
+        input_dim = len(stats['mean'])
+        raw = np.memmap(data_path, dtype=np.float32, mode='r')
+        n_samples = raw.size // (seq_len * input_dim)
+        X = raw.reshape(n_samples, seq_len, input_dim)
+
+    # CRITICAL: Use SAME normalization as training
+    X_tensor = torch.from_numpy(X).float().to(DEVICE)
+    
+    # Fill NaNs with mean (SAME as training)
+    nan_mask = torch.isnan(X_tensor)
+    mean_expanded = mean.view(1, 1, -1).expand_as(X_tensor)
+    X_tensor = torch.where(nan_mask, mean_expanded, X_tensor)
+    
+    # Normalize
+    std_expanded = std.view(1, 1, -1).expand_as(X_tensor)
+    X_tensor = (X_tensor - mean_expanded) / std_expanded
+    
+    # Clean up
+    X_tensor = torch.nan_to_num(X_tensor, nan=0.0)
+
+    if labels_path:
+        y = np.load(labels_path, allow_pickle=True)
+        return X_tensor, y
+
+    return X_tensor
 
 def bootstrap_auc_ci(y_true, y_scores, n_bootstraps=1000, seed=42):
+    """Compute bootstrap confidence interval for AUROC."""
     rng = np.random.RandomState(seed)
-    y_true = np.array(y_true)
-    y_scores = np.array(y_scores)
-    n = len(y_true)
-
     bootstrapped_scores = []
+    n = len(y_true)
 
     for _ in range(n_bootstraps):
         indices = rng.randint(0, n, n)
-
-        # Skip if resample contains only one class
         if len(np.unique(y_true[indices])) < 2:
             continue
-
         score = roc_auc_score(y_true[indices], y_scores[indices])
         bootstrapped_scores.append(score)
 
-    lower = np.percentile(bootstrapped_scores, 2.5)
-    upper = np.percentile(bootstrapped_scores, 97.5)
+    return np.percentile(bootstrapped_scores, 2.5), np.percentile(bootstrapped_scores, 97.5)
 
-    return lower, upper
 
-def make_condition(x):
-    # Simulates "Static Context" by taking Mean and Std of the window (24 features)
-    # This tests if 'Summary Statistics' help the model.
-    return torch.cat([x.mean(dim=1), x.std(dim=1)], dim=1)
+def calculate_ppv_at_prevalence(sensitivity, specificity, prevalence):
+    """Calculate Positive Predictive Value at true prevalence."""
+    tp = sensitivity * prevalence
+    fp = (1 - specificity) * (1 - prevalence)
+    return tp / (tp + fp) if (tp + fp) > 0 else 0.0
 
-def main():
-    print(">>> LOADING DATA...")
-    with open(STATS_PATH, 'r') as f:
-        stats = json.load(f)
-        mean, std = torch.tensor(stats['mean']).to(DEVICE), torch.tensor(stats['std']).to(DEVICE) + 1e-6
-    X_test_raw = np.nan_to_num(np.load(X_TEST_PATH), nan=0.0)
-    y_test_raw = np.load(Y_TEST_PATH)
+
+def get_metrics_comprehensive(y_true, y_scores, threshold, model_name, true_prevalence=0.0001):
+    """
+    Compute comprehensive metrics including realistic prevalence estimates.
     
-    # --- STRICT SPLIT ---
-    split_point = len(X_test_raw) // 2
-    X_eval = torch.tensor(X_test_raw[split_point:], dtype=torch.float32).to(DEVICE)
-    y_eval = y_test_raw[split_point:]
+    Args:
+        threshold: Detection threshold (from validation set)
+        true_prevalence: Realistic event prevalence (default 0.01% = 0.0001)
+    """
+    # ROC metrics
+    fpr, tpr, _ = roc_curve(y_true, y_scores)
+    roc_auc = auc(fpr, tpr)
+    ci_lower, ci_upper = bootstrap_auc_ci(y_true, y_scores)
     
-    # Scarcity Training Pool
-    X_pool = X_test_raw[:split_point]
-    y_pool = y_test_raw[:split_point]
-    pool_anom_idx = np.where(y_pool == 1)[0]
-    pool_norm_idx = np.where(y_pool == 0)[0]
-    np.random.seed(42)
-    np.random.shuffle(pool_anom_idx)
-    selected_anom_idx = pool_anom_idx[:N_FEW_SHOT]
-    train_idxs = np.concatenate([pool_norm_idx, selected_anom_idx])
-    np.random.shuffle(train_idxs)
+    # Threshold-based metrics (at balanced test set)
+    y_pred = (y_scores >= threshold).astype(int)
+    tn = np.sum((y_true == 0) & (y_pred == 0))
+    fp = np.sum((y_true == 0) & (y_pred == 1))
+    fn = np.sum((y_true == 1) & (y_pred == 0))
+    tp = np.sum((y_true == 1) & (y_pred == 1))
     
-    X_sup_train = torch.tensor(X_pool[train_idxs], dtype=torch.float32).to(DEVICE)
-    y_sup_train = torch.tensor(y_pool[train_idxs], dtype=torch.float32).to(DEVICE)
-
-    # Normalize
-    X_eval = torch.nan_to_num((X_eval - mean) / std, nan=0.0, posinf=5.0, neginf=-5.0)
-    X_sup_train = torch.nan_to_num((X_sup_train - mean) / std, nan=0.0, posinf=5.0, neginf=-5.0)
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    precision_balanced = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     
-    X_unsup_mmap = np.memmap(X_TRAIN_PATH, dtype='float32', mode='r')
-    X_unsup = torch.tensor(np.nan_to_num(np.array(X_unsup_mmap[:5000*96*12]).reshape(5000, 96, 12), nan=0.0), dtype=torch.float32).to(DEVICE)
-    X_unsup = (X_unsup - mean) / std
+    # Realistic prevalence metrics
+    ppv_realistic = calculate_ppv_at_prevalence(sensitivity, specificity, true_prevalence)
+    
+    # AUPRC
+    precision_curve, recall_curve, _ = precision_recall_curve(y_true, y_scores)
+    auprc = auc(recall_curve, precision_curve)
+    
+    return {
+        "Model": model_name,
+        "AUROC": roc_auc,
+        "CI_Lower": ci_lower,
+        "CI_Upper": ci_upper,
+        "AUPRC": auprc,
+        "Sensitivity": sensitivity,
+        "Specificity": specificity,
+        "Precision_Balanced": precision_balanced,
+        "PPV_Realistic": ppv_realistic,
+        "FPR": fpr,
+        "TPR": tpr,
+        "Scores": y_scores,
+        "Threshold": threshold
+    }
 
-    results = []
 
-    # --- 1. LSTM-VAE ---
-    print("\n[1/5] Evaluating LSTM-VAE (Dynamic Only)...")
-    model = LSTM_VAE(12, 96, 32, 64).to(DEVICE)
-    try:
-        model.load_state_dict(torch.load("models/lstm_vae/best_checkpoint.pt"))
+def train_unsupervised_baseline(X_train, X_val, y_val, model_class, epochs=20, lr=1e-3):
+    """Train unsupervised model (AE) with validation monitoring."""
+    model = model_class().to(DEVICE)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    
+    X_train_subset = X_train 
+    
+    train_loader = DataLoader(X_train_subset, batch_size=256, shuffle=True)
+    
+    best_val_auc = 0.0
+    best_model_state = None
+    
+    for epoch in range(epochs):
+        model.train()
+        for x_batch in train_loader:
+            optimizer.zero_grad()
+            recon = model(x_batch)
+            loss = nn.functional.mse_loss(recon, x_batch)
+            loss.backward()
+            optimizer.step()
+        
+        # Validation (compute reconstruction error)
         model.eval()
         with torch.no_grad():
-            recon, _, _, _ = model(X_eval)
-            scores = torch.mean((X_eval - recon) ** 2, dim=[1, 2]).cpu().numpy()
-        results.append(get_metrics(y_eval, scores, "LSTM-VAE"))
-    except: print("Err: Checkpoint missing")
-
-    # --- 2. CVAE ---
-    print("\n[2/5] Training CVAE (Dynamic + Static Context)...")
-    # Condition: 24 features (Mean + Std of window) to simulate "Static Summary"
-    model = CVAE(input_dim=12, cond_dim=24, seq_len=96).to(DEVICE)
-    opt = optim.Adam(model.parameters(), lr=1e-3)
-    model.train()
-    # Train CVAE on Unsupervised Data
-    for _ in range(15):
-        opt.zero_grad()
-        c = make_condition(X_unsup) # Create static context
-        recon, mu, logvar, _ = model(X_unsup, c)
-        mse = nn.functional.mse_loss(recon, X_unsup)
-        kld = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-        loss = mse + 0.001 * kld
-        loss.backward()
-        opt.step()
-    model.eval()
-    with torch.no_grad():
-        c_eval = make_condition(X_eval)
-        recon, _, _, _ = model(X_eval, c_eval)
-        scores = torch.mean((X_eval - recon) ** 2, dim=[1, 2]).cpu().numpy()
-    results.append(get_metrics(y_eval, scores, "CVAE"))
-
-    # --- 3. Bi-GRU ---
-    print(f"\n[3/5] Training Bi-GRU ({N_FEW_SHOT}-shot)...")
-    model = BiGRUClassifier(12, 64).to(DEVICE)
-    opt, crit = optim.Adam(model.parameters(), lr=1e-3), nn.BCELoss()
-    loader = DataLoader(TensorDataset(X_sup_train, y_sup_train.unsqueeze(1)), batch_size=32, shuffle=True)
-    model.train()
-    for _ in range(20):
-        for x, y in loader:
-            opt.zero_grad()
-            loss = crit(model(x), y)
-            loss.backward()
-            opt.step()
-    model.eval()
-    with torch.no_grad(): scores = model(X_eval).cpu().numpy().flatten()
-    results.append(get_metrics(y_eval, scores, "Bi-GRU"))
-
-    # --- 4. Standard AE ---
-    print("\n[4/5] Training Standard AE...")
-    model = StandardAE(12*96).to(DEVICE)
-    opt = optim.Adam(model.parameters(), lr=1e-3)
-    model.train()
-    for _ in range(15):
-        opt.zero_grad()
-        recon = model(X_unsup)
-        loss = nn.functional.mse_loss(recon, X_unsup)
-        loss.backward()
-        opt.step()
-    model.eval()
-    with torch.no_grad():
-        recon = model(X_eval)
-        scores = torch.mean((X_eval - recon) ** 2, dim=[1, 2]).cpu().numpy()
-    results.append(get_metrics(y_eval, scores, "Standard AE"))
-
-    # --- 5. XGBoost ---
-    print(f"\n[5/5] Training XGBoost...")
-    # Augment Data with Static Context
-    X_sup_flat = X_sup_train.reshape(len(X_sup_train), -1)
-    c_sup = make_condition(X_sup_train)
-    X_sup_augmented = torch.cat([X_sup_flat, c_sup], dim=1).cpu().numpy() # Add static info
+            val_recon = model(X_val)
+            val_errors = torch.mean((X_val - val_recon) ** 2, dim=[1, 2]).cpu().numpy()
+            val_auc = roc_auc_score(y_val, val_errors)
+        
+        if val_auc > best_val_auc:
+            best_val_auc = val_auc
+            best_model_state = model.state_dict().copy()
     
-    X_eval_flat = X_eval.reshape(len(X_eval), -1)
-    c_eval = make_condition(X_eval)
-    X_eval_augmented = torch.cat([X_eval_flat, c_eval], dim=1).cpu().numpy()
-    
-    xgb_model = xgb.XGBClassifier(n_estimators=100, max_depth=6, eval_metric='logloss', use_label_encoder=False)
-    xgb_model.fit(X_sup_augmented, y_sup_train.cpu().numpy())
-    scores = xgb_model.predict_proba(X_eval_augmented)[:, 1]
-    results.append(get_metrics(y_eval, scores, "XGBoost"))
+    if best_model_state:
+        model.load_state_dict(best_model_state)
+    return model
 
-    # --- REPORT ---
-    print("\n" + "="*80)
-    print(f"{'Model':<20} | {'AUROC (95% CI)':<25} | {'Recall':<8} | {'Precision':<8} | {'AUPRC':<8}")
-    print("-" * 80)
+
+def main():
+    print("="*80)
+    print("COMPARISON STUDY: LSTM-VAE vs Baselines")
+    print("="*80)
+    
+    # Load data
+    print("\n>>> Loading data...")
+    X_train = load_and_normalize_data(X_TRAIN_PATH)
+    X_val, y_val = load_and_normalize_data(X_VAL_PATH, Y_VAL_PATH)
+    X_test, y_test = load_and_normalize_data(X_TEST_PATH, Y_TEST_PATH)
+    
+    print(f"Train: {X_train.shape}")
+    print(f"Val: {X_val.shape} (Anomalies: {np.sum(y_val)})")
+    print(f"Test: {X_test.shape} (Anomalies: {np.sum(y_test)})")
+    
+    # Load validation threshold (selected on validation set)
+    with open(VAL_METRICS_PATH, 'r') as f:
+        val_metrics = json.load(f)
+        threshold_lstm_vae = val_metrics['best_threshold']['threshold']
+    
+    print(f"\nLSTM-VAE threshold (from validation): {threshold_lstm_vae:.4f}")
+    
+    results = []
+    
+    # --- 1. LSTM-VAE (Unsupervised) ---
+    print("\n[1/2] Evaluating LSTM-VAE...")
+    try:
+        model = LSTM_VAE(input_dim=X_test.shape[-1], seq_len=96, embed_dim=32, hidden_dim=64).to(DEVICE)
+        checkpoint = torch.load(LSTM_VAE_CHECKPOINT, map_location=DEVICE, weights_only=False)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model.eval()
+        
+        with torch.no_grad():
+            recon, _, _, _ = model(X_test)
+            scores = torch.mean((X_test - recon) ** 2, dim=[1, 2]).cpu().numpy()
+        
+        results.append(get_metrics_comprehensive(
+            y_test, scores, threshold_lstm_vae, "LSTM-VAE", true_prevalence=0.0001
+        ))
+        print("✓ LSTM-VAE evaluated")
+    except Exception as e:
+        print(f"✗ LSTM-VAE failed: {e}")
+    
+    # --- 2. Standard AE (Unsupervised, Non-Temporal) ---
+    print("\n[2/2] Training Standard AE...")
+    try:
+        model = train_unsupervised_baseline(
+            X_train, X_val, y_val, 
+            lambda: StandardAE(seq_len=96, input_dim=X_test.shape[-1]),
+            epochs=20
+        )
+        
+        model.eval()
+        with torch.no_grad():
+            recon = model(X_test)
+            scores = torch.mean((X_test - recon) ** 2, dim=[1, 2]).cpu().numpy()
+        
+        # Find optimal threshold on validation
+        with torch.no_grad():
+            val_recon = model(X_val)
+            val_errors = torch.mean((X_val - val_recon) ** 2, dim=[1, 2]).cpu().numpy()
+        fpr, tpr, thresholds = roc_curve(y_val, val_errors)
+        gmeans = np.sqrt(tpr * (1 - fpr))
+        threshold_ae = thresholds[np.argmax(gmeans)]
+        
+        results.append(get_metrics_comprehensive(
+            y_test, scores, threshold_ae, "Standard AE", true_prevalence=0.0001
+        ))
+        print("✓ Standard AE trained and evaluated")
+    except Exception as e:
+        print(f"✗ Standard AE failed: {e}")
+    
+    # --- REPORT RESULTS ---
+    print("\n" + "="*100)
+    print("RESULTS SUMMARY")
+    print("="*100)
+    print(f"{'Model':<25} | {'AUROC (95% CI)':<25} | {'Sens':<6} | {'Spec':<6} | {'Prec@Bal':<9} | {'PPV@0.01%':<10}")
+    print("-"*100)
+    
     for res in results:
         print(
-            f"{res['Model']:<20} | "
-            f"{res['AUROC']:.4f} ({res['AUROC_CI_L']:.4f}-{res['AUROC_CI_U']:.4f}) | "
-            f"{res['Recall']:.4f}   | "
-            f"{res['Precision']:.4f}    | "
-            f"{res['AUPRC']:.4f}"
+            f"{res['Model']:<25} | "
+            f"{res['AUROC']:.3f} ({res['CI_Lower']:.3f}-{res['CI_Upper']:.3f}) | "
+            f"{res['Sensitivity']:.3f}  | "
+            f"{res['Specificity']:.3f}  | "
+            f"{res['Precision_Balanced']:.3f}     | "
+            f"{res['PPV_Realistic']:.4f}"
         )
-
-    # --- PLOTS ---
-    colors = ['#1f77b4', '#9467bd', '#d62728', '#2ca02c', '#ff7f0e'] # Blue, Purple, Red, Green, Orange
     
-    # 1. ROC
+    print("\nKEY:")
+    print("  Sens = Sensitivity (Recall)")
+    print("  Spec = Specificity")
+    print("  Prec@Bal = Precision on balanced test set (50/50)")
+    print("  PPV@0.01% = Positive Predictive Value at realistic prevalence (0.01%)")
+    
+    # --- PLOTS ---
+    print("\n>>> Generating figures...")
+    
+    # 1. ROC Curve
     plt.figure(figsize=(8, 6))
+    colors = ['#1f77b4', '#2ca02c']
+    
     for i, res in enumerate(results):
         lw = 2.5 if "LSTM" in res['Model'] else 1.5
-        plt.plot(res['FPR'], res['TPR'], label=f"{res['Model']} (AUC = {res['AUROC']:.2f})", color=colors[i], linewidth=lw)
-    plt.plot([0, 1], [0, 1], 'k--', alpha=0.5)
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('Receiver Operating Characteristic')
-    plt.legend(loc='lower right', frameon=True)
-    plt.savefig(RESULTS_DIR / "comparison_roc.pdf")
-
-    # 2. SEPARATION HISTOGRAMS (ZOOMED KDE)
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        plt.plot(res['FPR'], res['TPR'], 
+                label=f"{res['Model']} (AUC = {res['AUROC']:.2f})",
+                color=colors[i], linewidth=lw)
     
-    def plot_zoomed_hist(ax, scores, y_true, title, color_norm, color_anom):
-        upper_limit = np.percentile(scores, 98) 
-        viz_scores = np.clip(scores, 0, upper_limit)
-        sns.histplot(viz_scores[y_true==0], color=color_norm, label='Normal', stat="density", kde=True, bins=50, alpha=0.3, ax=ax, edgecolor=None)
-        sns.histplot(viz_scores[y_true==1], color=color_anom, label='Acute Event', stat="density", kde=True, bins=50, alpha=0.3, ax=ax, edgecolor=None)
+    plt.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Random')
+    plt.xlabel('False Positive Rate', fontsize=20)
+    plt.ylabel('True Positive Rate', fontsize=20)
+    plt.title('Receiver Operating Characteristic', fontsize=22, fontweight='bold')
+    plt.legend(loc='lower right', frameon=True, fontsize=16)
+    plt.xticks(fontsize=16)
+    plt.yticks(fontsize=16)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(RESULTS_DIR / "comparison_roc.pdf", dpi=300, bbox_inches='tight')
+    plt.savefig(RESULTS_DIR / "comparison_roc.png", dpi=300, bbox_inches='tight')
+    print(f"✓ Saved: {RESULTS_DIR / 'comparison_roc.pdf'}")
+    plt.close()
+    
+    # 2. Error Distribution Comparison
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+    
+    def plot_separation(ax, scores, y_true, title, threshold):
+        normal_scores = scores[y_true == 0]
+        anomaly_scores = scores[y_true == 1]
         
-        # Threshold
-        precision, recall, thresholds = precision_recall_curve(y_true, scores)
-        f1 = 2 * (precision * recall) / (precision + recall + 1e-8)
-        best_thresh = thresholds[np.argmax(f1)]
-        if best_thresh < upper_limit:
-            ax.axvline(best_thresh, color='black', linestyle='--', linewidth=2, label=f'Threshold ({best_thresh:.3f})')
+        # Use percentile for intelligent zooming
+        p05 = np.percentile(normal_scores, 5)
+        p95_normal = np.percentile(normal_scores, 95)
+        p95_anomaly = np.percentile(anomaly_scores, 95)
+        upper = max(p95_normal, p95_anomaly) * 1.2
         
-        ax.set_title(title, fontsize=12, fontweight='bold')
-        ax.set_xlabel("Reconstruction Error (MSE)")
-        ax.legend(loc='upper right')
-        ax.grid(True, alpha=0.2)
-
-    # Plot LSTM-VAE (Left)
-    plot_zoomed_hist(axes[0], results[0]['Scores'], y_eval, "LSTM-VAE (Unsupervised)\nEffective Separation", '#1f77b4', '#d62728')
-    # Plot CVAE or Standard AE (Right) - Showing AE as it's the main baseline
-    plot_zoomed_hist(axes[1], results[3]['Scores'], y_eval, "Standard AE (Non-Temporal)\nSignificant Overlap", '#2ca02c', '#ff7f0e')
+        normal_clip = np.clip(normal_scores, p05, upper)
+        anomaly_clip = np.clip(anomaly_scores, p05, upper)
+        
+        # Plot with enhanced visual separation
+        sns.kdeplot(normal_clip, color='#2E86AB', shade=True, alpha=0.6, 
+                   linewidth=2.5, label='Normal', ax=ax)
+        sns.kdeplot(anomaly_clip, color='#A23B72', shade=True, alpha=0.6,
+                   linewidth=2.5, label='Anomaly', ax=ax)
+        
+        # Add rugplot for actual data points (sampled for clarity)
+        sample_idx_normal = np.random.choice(len(normal_clip), min(500, len(normal_clip)), replace=False)
+        sample_idx_anomaly = np.random.choice(len(anomaly_clip), min(500, len(anomaly_clip)), replace=False)
+        
+        ax.scatter(normal_clip[sample_idx_normal], np.zeros(len(sample_idx_normal)) - 0.02,
+                  alpha=0.3, s=10, color='#2E86AB', marker='|')
+        ax.scatter(anomaly_clip[sample_idx_anomaly], np.zeros(len(sample_idx_anomaly)) - 0.02,
+                  alpha=0.3, s=10, color='#A23B72', marker='|')
+        
+        # Threshold line with fill
+        if p05 <= threshold <= upper:
+            ax.axvline(threshold, color='#F18F01', linestyle='--', linewidth=3,
+                      label=f'Threshold', zorder=10)
+            
+            # Add shaded regions for decision boundaries
+            ax.axvspan(p05, threshold, alpha=0.1, color='#2E86AB', zorder=0)
+            ax.axvspan(threshold, upper, alpha=0.1, color='#A23B72', zorder=0)
+        
+        ax.set_title(title, fontsize=24, fontweight='bold', pad=12)
+        ax.set_xlabel("Reconstruction Error", fontsize=20)
+        ax.set_ylabel("Density", fontsize=20)
+        ax.legend(loc='upper right', fontsize=16, framealpha=0.95)
+        ax.tick_params(axis='both', which='major', labelsize=16)
+        ax.grid(True, alpha=0.25, linestyle=':', linewidth=0.8)
+        ax.set_xlim(p05, upper)
+        
+        # Remove top and right spines
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+    
+    # Plot LSTM-VAE and Standard AE
+    if len(results) >= 2:
+        plot_separation(axes[0], results[0]['Scores'], y_test,
+                       "LSTM-VAE",
+                       results[0]['Threshold'])
+        plot_separation(axes[1], results[1]['Scores'], y_test,
+                       "Standard AE",
+                       results[1]['Threshold'])
     
     plt.tight_layout()
-    plt.savefig(RESULTS_DIR / "comparison_histograms.pdf")
-    print(f"\nFigures exported to: {RESULTS_DIR}")
+    plt.savefig(RESULTS_DIR / "comparison_distributions.pdf", dpi=300, bbox_inches='tight')
+    plt.savefig(RESULTS_DIR / "comparison_distributions.png", dpi=300, bbox_inches='tight')
+    print(f"✓ Saved: {RESULTS_DIR / 'comparison_distributions.pdf'}")
+    plt.close()
+    
+    # Save metrics to CSV for paper
+    metrics_df = pd.DataFrame([{
+        'Model': res['Model'],
+        'AUROC': f"{res['AUROC']:.3f}",
+        'CI_Lower': f"{res['CI_Lower']:.3f}",
+        'CI_Upper': f"{res['CI_Upper']:.3f}",
+        'Sensitivity': f"{res['Sensitivity']:.3f}",
+        'Specificity': f"{res['Specificity']:.3f}",
+        'Precision_Balanced': f"{res['Precision_Balanced']:.3f}",
+        'PPV_Realistic': f"{res['PPV_Realistic']:.4f}",
+        'AUPRC': f"{res['AUPRC']:.3f}"
+    } for res in results])
+    
+    metrics_df.to_csv(RESULTS_DIR / "comparison_metrics.csv", index=False)
+    print(f"✓ Saved: {RESULTS_DIR / 'comparison_metrics.csv'}")
+    
+    print("\n" + "="*80)
+    print("COMPARISON COMPLETE")
+    print("="*80)
+    print(f"\nAll results saved to: {RESULTS_DIR}/")
+    print("  - comparison_roc.pdf")
+    print("  - comparison_distributions.pdf")
+    print("  - comparison_metrics.csv")
+
 
 if __name__ == "__main__":
     main()
