@@ -13,7 +13,7 @@ from src.components.database import initialize_database, normalize_from_sources,
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-RAW_DATA_PATH = Path(__file__).parent.parent / "data" / "raw" / "HRP_new"
+RAW_DATA_PATH = Path(__file__).parent.parent / "data" / "raw" / "2026-02-08"
 
 
 def _load_single_measurement_file(excel_path: Path) -> pd.DataFrame:
@@ -327,13 +327,19 @@ def load_all_data(
         fresh_start: If True, delete existing database and start fresh
     """
     measurement_files = [
-        data_dir / "data_202512221122-01-09.xlsx",
-        data_dir / "data_202512221231-16-23.xlsx",
-        data_dir / "data_202512221344-24-30.xlsx",
+        data_dir / "data-2025-12-01-07_202602091218.xlsx",
+        data_dir / "data-2025-12-08-14_202602091252.xlsx",
+        data_dir / "data-2025-12-15-21_202602091330.xlsx",
+        data_dir / "data-2025-12-22-28_202602091430.xlsx",
+        data_dir / "data-2025-12-29-2026-01-04_202602091614.xlsx",
+        data_dir / "data-2026-01-05-11-_202602092056.xlsx",
+        data_dir / "data-2026-01-12-18_202602100141.xlsx",
+        data_dir / "data-2026-01-19-25_202602100226.xlsx",
+        data_dir / "data-2026-01-26-31-.xlsx",
     ]
-    medical_file = data_dir / "Med&Diseases_202512221410.xlsx"
-    alerts_file = data_dir / "SOS_202512221411.xlsx"
-    seniors_demo_file = data_dir / "SeniorGenderAge_202512221409.xlsx"
+    medical_file = data_dir / "Med&Diseases_202602082215.xlsx"
+    alerts_file = data_dir / "SOS_202602082216.xlsx"
+    seniors_demo_file = data_dir / "SeniorGenderAge_202602082214.xlsx"
 
     db_path = Path(__file__).parent.parent.parent / "db" / "hrp_data.db"
     if fresh_start and db_path.exists():
