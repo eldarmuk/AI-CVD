@@ -141,7 +141,7 @@ def get_valid_senior_ids(conn_out):
 
 def classify_severity(note):
     if pd.isna(note):
-        return 0
+        return -1
 
     note_l = str(note).lower()
 
@@ -248,7 +248,7 @@ def process_seniors(conn_in, conn_out):
     RESUMABLE: Skipped if already processed.
     
     Steps:
-    1. Filter age between 40-120
+    1. Filter age between 60-110
     2. Replace 'Unknown' gender with NaN
     3. Drop seniors with both birthdate AND age as NULL
     4. Calculate missing age or birthdate using 2026 as current year
@@ -272,9 +272,9 @@ def process_seniors(conn_in, conn_out):
     print(f"Initial seniors: {len(df):,}")
     
     # 1. Filter age
-    age_mask = (df['age'] >= 40) & (df['age'] <= 120)
+    age_mask = (df['age'] >= 60) & (df['age'] <= 110)
     df = df[age_mask]
-    print(f"After age filter (40-120): {len(df):,}")
+    print(f"After age filter (60-110): {len(df):,}")
     
     # 2. Replace 'Unknown' gender with NaN
     df.loc[df['gender'] == 'Unknown', 'gender'] = np.nan
@@ -283,6 +283,18 @@ def process_seniors(conn_in, conn_out):
     both_null = df['birthdate'].isna() & df['age'].isna()
     df = df[~both_null]
     print(f"After dropping both NULL: {len(df):,}")
+    
+    # Cross-validate age vs birthdate where both are present
+    df['birthdate_tmp'] = pd.to_datetime(df['birthdate'], errors='coerce')
+    both_present = df['age'].notna() & df['birthdate_tmp'].notna()
+    if both_present.any():
+        computed = CURRENT_YEAR - df.loc[both_present, 'birthdate_tmp'].dt.year
+        discrepancy = (computed - df.loc[both_present, 'age']).abs()
+        bad = discrepancy > 1
+        print(f"  - Age/birthdate discrepancy (>1yr): {bad.sum()} seniors — trusting birthdate")
+        # Overwrite stored age with birthdate-derived age for discrepant rows
+        df.loc[both_present & bad, 'age'] = computed[bad]
+    df.drop(columns=['birthdate_tmp'], inplace=True)
     
     # 4. Calculate missing values
     df['birthdate'] = pd.to_datetime(df['birthdate'], errors='coerce')
@@ -465,6 +477,18 @@ def process_measurements_chunked(conn_in, conn_out):
         # Clip outliers
         chunk_dedup = clip_outliers(chunk_dedup)
         
+        # Null out both sbp and dbp where BP is physiologically inverted
+        if 'sbp' in chunk_dedup.columns and 'dbp' in chunk_dedup.columns:
+            inverted = (
+                chunk_dedup['type'] == 'BloodPressure'
+            ) & (
+                chunk_dedup['dbp'] >= chunk_dedup['sbp']
+            )
+            if inverted.any():
+                chunk_dedup.loc[inverted, 'sbp'] = np.nan
+                chunk_dedup.loc[inverted, 'dbp'] = np.nan
+                chunk_dedup.loc[inverted, 'pulse_pressure'] = np.nan
+        
         # Add pulse pressure feature
         chunk_dedup['pulse_pressure'] = chunk_dedup['sbp'] - chunk_dedup['dbp']
         chunk_dedup.loc[chunk_dedup['pulse_pressure'] < PULSE_PRESSURE_MIN, 'pulse_pressure'] = np.nan
@@ -586,7 +610,7 @@ def process_alerts(conn_in, conn_out):
     
     # Severity distribution
     print("\nSeverity distribution:")
-    severity_map = {0: 'Noise/Tech', 1: 'Low', 2: 'Potential', 3: 'Acute'}
+    severity_map = {-1: 'Undocumented', 0: 'Noise/Tech', 1: 'Low', 2: 'Potential', 3: 'Acute'}
     for sev, count in df_events['severity'].value_counts().sort_index().items():
         print(f"  - Level {sev} ({severity_map[sev]}): {count:,}")
     
@@ -764,13 +788,9 @@ def main():
     init_checkpoint_table(conn_out)
     
     try:
-        # Process tables
-        # df_seniors = process_seniors(conn_in, conn_out)
         _ = process_seniors(conn_in, conn_out)
         process_measurements_chunked(conn_in, conn_out)
-        # df_alerts = process_alerts(conn_in, conn_out)
         _ = process_alerts(conn_in, conn_out)
-        # df_risk_profiles = create_risk_profiles(conn_in, conn_out)
         _ = create_risk_profiles(conn_in, conn_out)
         copy_auxiliary_tables(conn_in, conn_out)
         
@@ -786,6 +806,12 @@ def main():
         for table in tables:
             count = cursor_out.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             print(f"  - {table}: {count:,} rows")
+            
+        # Log seniors with no measurements in the processed DB
+        seniors_ids = set(pd.read_sql_query("SELECT id FROM seniors", conn_out)['id'])
+        measured_ids = set(pd.read_sql_query("SELECT DISTINCT senior_id FROM measurements", conn_out)['senior_id'])
+        zero_meas = seniors_ids - measured_ids
+        print(f"  - Seniors with zero measurements: {len(zero_meas)} ({100*len(zero_meas)/len(seniors_ids):.1f}%)")
         
         # Database file size
         db_size_mb = processed_db_path.stat().st_size / (1024 * 1024)
