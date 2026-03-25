@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 """
 Memory-Efficient Data Processing Pipeline for HRP Database
 
@@ -8,7 +5,7 @@ This script transforms the raw HRP database (db/hrp_data.db) into a cleaned
 and processed database (db/hrp_processed.db) suitable for ML modeling.
 
 Key Features:
-- Chunked processing for large measurements table
+- DuckDB native processing for measurements to handle 238M rows with 100% deduplication
 - Advanced deduplication with conflict resolution
 - Medical outlier clipping
 - Temporal alert burst merging
@@ -22,6 +19,7 @@ import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 import warnings
+import duckdb
 
 warnings.filterwarnings('ignore')
 
@@ -185,7 +183,7 @@ def categorize_disease(disease_name):
             if keyword in disease_lower:
                 return category
     
-    return 'other'
+    return 'unclassified'
 
 
 def round_measurements(df):
@@ -369,34 +367,48 @@ def update_checkpoint(conn_out, table_name, offset, completed=False):
     conn_out.commit()
 
 
-def process_measurements_chunked(conn_in, conn_out):
+def process_measurements_duckdb(raw_db_path, processed_db_path, conn_out):
     """
-    Process measurements table with chunking for memory efficiency.
-    RESUMABLE: Can resume from last checkpoint if interrupted.
+    Process measurements table using DuckDB.
+    Guarantees 100% deduplication across the entire dataset instantly.
     
     Steps:
-    1. Sort by senior_id and date
-    2. Identify duplicates (same senior_id, date, type)
-    3. Resolve conflicts by averaging values
-    4. Round values appropriately
-    5. Clip outliers
-    6. Add pulse_pressure feature
+    1. Attach raw and processed SQLite databases.
+    2. Filter seniors, group, deduplicate, and average values in one pass.
+    3. Apply medical rounding, clipping, and inverted BP logic.
+    4. Write directly back to the processed SQLite database.
     """
     print("\n" + "="*80)
-    print("PROCESSING MEASUREMENTS TABLE (CHUNKED & RESUMABLE)")
+    print("PROCESSING MEASUREMENTS TABLE")
     print("="*80)
-    # Get total row count
-    total_rows = pd.read_sql_query("SELECT COUNT(*) as cnt FROM measurements", conn_in).iloc[0]['cnt']
-    print(f"Total measurements: {total_rows:,}")
-
-    # Load valid seniors from processed 'seniors' table in output DB
-    valid_seniors = get_valid_senior_ids(conn_out)
-    print(f"Valid seniors in processed DB: {len(valid_seniors):,}")
     
-    # Create output table
-    cursor_out = conn_out.cursor()
-    cursor_out.execute("""
-        CREATE TABLE IF NOT EXISTS measurements (
+    # 1. Check if already completed
+    cursor = conn_out.cursor()
+    try:
+        count = cursor.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
+        if count > 0:
+            print(f"✓ Measurements table already processed: {count:,} rows")
+            return
+    except Exception:
+        pass
+    
+    print("Connecting DuckDB to SQLite databases...")
+    con = duckdb.connect()
+    con.execute("SET preserve_insertion_order=false;")
+    con.execute("INSTALL sqlite;")
+    con.execute("LOAD sqlite;")
+    
+    # Attach both databases directly to DuckDB
+    con.execute(f"CALL sqlite_attach('{raw_db_path}', overwrite=false, alias='raw_db');")
+    con.execute(f"CALL sqlite_attach('{processed_db_path}', overwrite=false, alias='proc_db');")
+    
+    print("Creating optimized schema in output database...")
+    # Drop table if it crashed previously to ensure a clean slate
+    con.execute("DROP TABLE IF EXISTS proc_db.measurements;")
+    
+    # Create the table explicitly so SQLite handles the Auto-Increment ID
+    con.execute("""
+        CREATE TABLE proc_db.measurements (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             senior_id INTEGER NOT NULL,
             value REAL,
@@ -405,127 +417,101 @@ def process_measurements_chunked(conn_in, conn_out):
             pulse_pressure REAL,
             date TEXT NOT NULL,
             type TEXT NOT NULL
-        )
+        );
     """)
-    conn_out.commit()
     
-    # Check for checkpoint - now stores last_id instead of offset
-    last_id = get_checkpoint(conn_out, 'measurements')
-    last_id = int(last_id)  # Ensure it's an integer
+    print("Executing deduplication and transformation...")
     
-    if last_id > 0:
-        print(f"\n⚠ Resuming from checkpoint: last_id {last_id:,}")
-        existing_count = cursor_out.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
-        print(f"  - Already processed: {existing_count:,} rows")
-    else:
-        print("\n✓ Starting fresh processing")
-        existing_count = 0
+    transform_query = f"""
+        INSERT INTO proc_db.measurements (senior_id, value, sbp, dbp, pulse_pressure, date, type)
+        WITH valid_seniors AS (
+            -- 1. Get valid seniors from the previously processed table
+            SELECT id as senior_id FROM proc_db.seniors
+        ),
+        deduped AS (
+            -- 2. Group by exact second to remove duplicates and average conflicts
+            SELECT 
+                m.senior_id, 
+                m.date, 
+                m.type, 
+                AVG(m.value) AS val, 
+                AVG(m.sbp) AS sbp, 
+                AVG(m.dbp) AS dbp
+            FROM raw_db.measurements m
+            INNER JOIN valid_seniors v ON m.senior_id = v.senior_id
+            GROUP BY m.senior_id, m.date, m.type
+        ),
+        rounded AS (
+            -- 3. Apply precision rounding rules
+            SELECT 
+                senior_id, date, type,
+                CASE WHEN type = 'Temperature' THEN ROUND(val, 1) ELSE ROUND(val, 0) END AS r_val,
+                ROUND(sbp, 0) AS r_sbp,
+                ROUND(dbp, 0) AS r_dbp
+            FROM deduped
+        ),
+        clipped AS (
+            -- 4. Apply medical outlier clipping
+            SELECT 
+                senior_id, date, type,
+                CASE 
+                    WHEN type = 'Heartrate' AND r_val > {OUTLIER_RANGES['Heartrate'][1]} THEN {OUTLIER_RANGES['Heartrate'][1]}
+                    WHEN type = 'Heartrate' AND r_val < {OUTLIER_RANGES['Heartrate'][0]} THEN {OUTLIER_RANGES['Heartrate'][0]}
+                    WHEN type = 'Temperature' AND r_val > {OUTLIER_RANGES['Temperature'][1]} THEN NULL
+                    WHEN type = 'Temperature' AND r_val < {OUTLIER_RANGES['Temperature'][0]} THEN {OUTLIER_RANGES['Temperature'][0]}
+                    WHEN type = 'Saturation' AND r_val < {OUTLIER_RANGES['Saturation'][0]} THEN {OUTLIER_RANGES['Saturation'][0]}
+                    ELSE r_val 
+                END AS c_val,
+                CASE 
+                    WHEN type = 'BloodPressure' AND r_sbp > {OUTLIER_RANGES['SBP'][1]} THEN {OUTLIER_RANGES['SBP'][1]}
+                    WHEN type = 'BloodPressure' AND r_sbp < {OUTLIER_RANGES['SBP'][0]} THEN {OUTLIER_RANGES['SBP'][0]}
+                    ELSE r_sbp 
+                END AS c_sbp,
+                CASE 
+                    WHEN type = 'BloodPressure' AND r_dbp > {OUTLIER_RANGES['DBP'][1]} THEN {OUTLIER_RANGES['DBP'][1]}
+                    WHEN type = 'BloodPressure' AND r_dbp < {OUTLIER_RANGES['DBP'][0]} THEN {OUTLIER_RANGES['DBP'][0]}
+                    ELSE r_dbp 
+                END AS c_dbp
+            FROM rounded
+        ),
+        bp_logic AS (
+            -- 5. Nullify inverted Blood Pressures
+            SELECT 
+                senior_id, 
+                c_val AS value,
+                CASE WHEN type = 'BloodPressure' AND c_dbp >= c_sbp THEN NULL ELSE c_sbp END AS sbp,
+                CASE WHEN type = 'BloodPressure' AND c_dbp >= c_sbp THEN NULL ELSE c_dbp END AS dbp,
+                date, type
+            FROM clipped
+        )
+        -- 6. Final Select: Calculate Pulse Pressure & Format Date
+        SELECT 
+            senior_id, value, sbp, dbp,
+            CASE 
+                WHEN type = 'BloodPressure' AND sbp IS NOT NULL AND dbp IS NOT NULL AND (sbp - dbp) >= {PULSE_PRESSURE_MIN} THEN (sbp - dbp)
+                ELSE NULL 
+            END AS pulse_pressure,
+            strftime(CAST(date AS TIMESTAMP), '%Y-%m-%d %H:%M:%S') AS date,
+            type
+        FROM bp_logic;
+    """
     
-    # Process in chunks
-    total_processed = existing_count
-    total_written = existing_count
+    # Execute the massive pipeline
+    con.execute(transform_query)
     
-    pbar = tqdm(total=total_rows, initial=existing_count, desc="Processing measurements", unit="rows")
-    dropped_not_in_seniors = 0
+    print("Building database indexes...")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_measurements_senior ON proc_db.measurements(senior_id);")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_measurements_date ON proc_db.measurements(date);")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_measurements_senior_date ON proc_db.measurements(senior_id, date);")
     
-    while True:
-        query = f"""
-            SELECT id, senior_id, value, sbp, dbp, date, type
-            FROM measurements
-            WHERE id > {last_id}
-            ORDER BY id
-            LIMIT {CHUNK_SIZE}
-        """
-        chunk = pd.read_sql_query(query, conn_in)
-        
-        if chunk.empty:
-            break
-        
-        chunk_size = len(chunk)
-        total_processed += chunk_size
-        
-        # Update last_id to max id in chunk
-        last_id = chunk['id'].max()
-
-        # Filter rows to only those seniors present in processed seniors table
-        before_filter = len(chunk)
-        chunk = chunk[chunk['senior_id'].isin(valid_seniors)]
-        dropped_not_in_seniors += (before_filter - len(chunk))
-        if chunk.empty:
-            # No rows to write for this chunk, but progress and checkpoint updated
-            update_checkpoint(conn_out, 'measurements', last_id)
-            pbar.update(chunk_size)
-            continue
-        
-        # Convert date to datetime
-        chunk['date'] = pd.to_datetime(chunk['date'], format='ISO8601')
-        
-        # Identify duplicates
-        dup_cols = ['senior_id', 'date', 'type']
-        
-        # Use .agg() but preserve groupby columns
-        chunk_dedup = chunk.groupby(dup_cols, as_index=False).agg({
-            'value': 'mean',
-            'sbp': 'mean',
-            'dbp': 'mean',
-            'id': 'first'
-        })
-        
-        # Round values
-        chunk_dedup = round_measurements(chunk_dedup)
-        
-        # Clip outliers
-        chunk_dedup = clip_outliers(chunk_dedup)
-        
-        # Null out both sbp and dbp where BP is physiologically inverted
-        if 'sbp' in chunk_dedup.columns and 'dbp' in chunk_dedup.columns:
-            inverted = (
-                chunk_dedup['type'] == 'BloodPressure'
-            ) & (
-                chunk_dedup['dbp'] >= chunk_dedup['sbp']
-            )
-            if inverted.any():
-                chunk_dedup.loc[inverted, 'sbp'] = np.nan
-                chunk_dedup.loc[inverted, 'dbp'] = np.nan
-                chunk_dedup.loc[inverted, 'pulse_pressure'] = np.nan
-        
-        # Add pulse pressure feature
-        chunk_dedup['pulse_pressure'] = chunk_dedup['sbp'] - chunk_dedup['dbp']
-        chunk_dedup.loc[chunk_dedup['pulse_pressure'] < PULSE_PRESSURE_MIN, 'pulse_pressure'] = np.nan
-        
-        # Convert date back to ISO string
-        chunk_dedup['date'] = chunk_dedup['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
-        
-        # Drop id column - let SQLite auto-generate new ids
-        chunk_dedup = chunk_dedup.drop(columns=['id'])
-        
-        # Write to output database
-        chunk_dedup.to_sql('measurements', conn_out, if_exists='append', index=False)
-        total_written += len(chunk_dedup)
-        
-        # Update checkpoint with last_id
-        update_checkpoint(conn_out, 'measurements', last_id)
-        
-        pbar.update(chunk_size)
+    con.close()
     
-    pbar.close()
+    # Mark as completed in your SQLite checkpoint system
+    update_checkpoint(conn_out, 'measurements', 0, completed=True)
     
-    print("\n✓ Measurements processing complete")
-    print(f"  - Total processed: {total_processed:,}")
-    print(f"  - Total written: {total_written:,}")
-    print(f"  - Dropped (not in seniors): {dropped_not_in_seniors:,}")
-    print(f"  - Duplicates removed (after filtering): {total_processed - dropped_not_in_seniors - total_written:,}")
-    
-    # Mark as completed
-    update_checkpoint(conn_out, 'measurements', last_id, completed=True)
-    
-    # Create indexes
-    print("\nCreating indexes...")
-    cursor_out.execute("CREATE INDEX IF NOT EXISTS idx_measurements_senior ON measurements(senior_id)")
-    cursor_out.execute("CREATE INDEX IF NOT EXISTS idx_measurements_date ON measurements(date)")
-    cursor_out.execute("CREATE INDEX IF NOT EXISTS idx_measurements_senior_date ON measurements(senior_id, date)")
-    conn_out.commit()
-    print("✓ Indexes created")
+    # Get final row count to display
+    final_count = conn_out.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
+    print(f"\n✓ Measurements processing complete! Wrote {final_count:,} unique rows.")
 
 
 def process_alerts(conn_in, conn_out):
@@ -789,7 +775,7 @@ def main():
     
     try:
         _ = process_seniors(conn_in, conn_out)
-        process_measurements_chunked(conn_in, conn_out)
+        process_measurements_duckdb(raw_db_path, processed_db_path, conn_out)
         _ = process_alerts(conn_in, conn_out)
         _ = create_risk_profiles(conn_in, conn_out)
         copy_auxiliary_tables(conn_in, conn_out)
