@@ -315,6 +315,7 @@ def load_all_data(
     measurement_files = [
         # Old 30-day data (Nov)
         OLD_DATA_PATH / "data_202512221122-01-09.xlsx",
+        OLD_DATA_PATH / "data_202511181045.xlsx",
         OLD_DATA_PATH / "data_202512221231-16-23.xlsx",
         OLD_DATA_PATH / "data_202512221344-24-30.xlsx",
         
@@ -355,7 +356,7 @@ def load_all_data(
     try:
         for seniors_demo_file in seniors_demo_files:
             if seniors_demo_file.exists():
-                seniors_df = load_seniors_demographics(seniors_demo_file)
+                seniors_df = load_seniors_demographics([seniors_demo_file])
                 insert_seniors_demographics(seniors_df, conn)
             else:
                 logger.warning(f"Seniors demographic file not found: {seniors_demo_file}")
