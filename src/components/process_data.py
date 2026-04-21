@@ -17,7 +17,6 @@ import sqlite3
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from tqdm import tqdm
 import warnings
 import duckdb
 
