@@ -325,7 +325,7 @@ def process_seniors(conn_in, conn_out):
     return df
 
 
-def process_measurements_duckdb(raw_db_path, processed_db_path, conn_out):
+def process_measurements_duckdb(raw_db_path, processed_db_path):
     """
     Process measurements table using DuckDB.
 
@@ -349,7 +349,8 @@ def process_measurements_duckdb(raw_db_path, processed_db_path, conn_out):
     print("PROCESSING MEASUREMENTS TABLE", flush=True)
     print("="*80, flush=True)
 
-    cursor = conn_out.cursor()
+    conn = sqlite3.connect(str(processed_db_path))
+    cursor = conn.cursor()
     try:
         count = cursor.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
         if count > 0:
@@ -359,8 +360,8 @@ def process_measurements_duckdb(raw_db_path, processed_db_path, conn_out):
         pass
 
     print("Creating schema via SQLite connection...", flush=True)
-    conn_out.execute("DROP TABLE IF EXISTS measurements;")
-    conn_out.execute("""
+    conn.execute("DROP TABLE IF EXISTS measurements;")
+    conn.execute("""
         CREATE TABLE measurements (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             senior_id     INTEGER NOT NULL,
@@ -372,8 +373,9 @@ def process_measurements_duckdb(raw_db_path, processed_db_path, conn_out):
             type          TEXT NOT NULL
         );
     """)
-    conn_out.commit()
-    conn_out.close()
+    conn.commit()
+    conn.close()
+    conn = None
     print("SQLite connection released - handing file to DuckDB.", flush=True)
 
     print("Connecting DuckDB to SQLite databases...", flush=True)
@@ -488,21 +490,24 @@ def process_measurements_duckdb(raw_db_path, processed_db_path, conn_out):
     """
 
     con.execute(transform_query)
-
-    print("Building database indexes...", flush=True)
-    con.execute("CREATE INDEX IF NOT EXISTS idx_meas_senior      ON proc_db.measurements(senior_id);")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_meas_date        ON proc_db.measurements(date);")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_meas_type        ON proc_db.measurements(type);")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_meas_senior_date ON proc_db.measurements(senior_id, date);")
     con.close()
     print("DuckDB connection closed.", flush=True)
 
-    conn_out = sqlite3.connect(str(processed_db_path))
+    print("Building database indexes...", flush=True)
+    conn = sqlite3.connect(str(processed_db_path))
+    conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_meas_senior      ON measurements(senior_id);
+        CREATE INDEX IF NOT EXISTS idx_meas_date        ON measurements(date);
+        CREATE INDEX IF NOT EXISTS idx_meas_type        ON measurements(type);
+        CREATE INDEX IF NOT EXISTS idx_meas_senior_date ON measurements(senior_id, date);
+    """)
+    conn.commit()
+    print("SQLite indexes built.", flush=True)
 
-    update_checkpoint(conn_out, 'measurements', 0, completed=True)
-    final_count = conn_out.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
+    update_checkpoint(conn, 'measurements', 0, completed=True)
+    final_count = conn.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
     print(f"\nOK: Measurements processing complete! Wrote {final_count:,} unique rows.", flush=True)
-
+    conn.close()
 
 def process_alerts(conn_in, conn_out):
     """
@@ -705,7 +710,11 @@ def main():
 
     try:
         process_seniors(conn_in, conn_out)
-        process_measurements_duckdb(raw_db_path, processed_db_path, conn_out)
+
+        conn_out.close()
+        process_measurements_duckdb(raw_db_path, processed_db_path)
+        conn_out = sqlite3.connect(processed_db_path)
+
         process_alerts(conn_in, conn_out)
         create_risk_profiles(conn_in, conn_out)
         copy_auxiliary_tables(conn_in, conn_out)
@@ -736,7 +745,8 @@ def main():
 
     finally:
         conn_in.close()
-        conn_out.close()
+        if conn_out is not None:
+            conn_out.close()
 
 
 if __name__ == "__main__":
