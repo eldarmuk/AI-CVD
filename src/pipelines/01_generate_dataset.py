@@ -11,12 +11,13 @@ Key Features:
 """
 
 import os
+import json
 import numpy as np
 import pandas as pd
 from pathlib import Path
 import random
 import logging
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 import shutil
 
 from ..components.utils import get_feature_columns
@@ -40,6 +41,78 @@ X_TEST_PATH = OUTPUT_DIR / 'X_test.npy'
 Y_VAL_PATH = OUTPUT_DIR / 'y_val.npy'
 Y_TEST_PATH = OUTPUT_DIR / 'y_test.npy'
 METADATA_PATH = OUTPUT_DIR / 'anomaly_dataset_metadata.txt'
+SPLIT_MANIFEST_PATH = OUTPUT_DIR / 'split_manifest.json'
+TRAIN_ROWS_PATH = OUTPUT_DIR / 'train_rows.parquet'
+VAL_ROWS_PATH = OUTPUT_DIR / 'val_rows.parquet'
+TEST_ROWS_PATH = OUTPUT_DIR / 'test_rows.parquet'
+
+
+def assert_disjoint_splits(split_map: Dict[str, List]) -> None:
+    """Fail fast if a senior appears in more than one split."""
+    split_sets = {name: set(seniors) for name, seniors in split_map.items()}
+    pairs = [('train', 'val'), ('train', 'test'), ('val', 'test')]
+    overlaps = {
+        f"{left}_{right}": sorted(split_sets[left] & split_sets[right])
+        for left, right in pairs
+        if split_sets[left] & split_sets[right]
+    }
+
+    if overlaps:
+        preview = {name: values[:10] for name, values in overlaps.items()}
+        raise ValueError(f"Senior-wise split leakage detected: {preview}")
+
+
+def write_subjectwise_split_artifacts(
+    df: pd.DataFrame,
+    train_seniors: List,
+    val_seniors: List,
+    test_seniors: List
+) -> None:
+    """
+    Persist row-level split parquet files before rolling windows are generated.
+    These files are useful for auditing that no senior_id crosses train/val/test.
+    """
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    split_map = {
+        'train': list(train_seniors),
+        'val': list(val_seniors),
+        'test': list(test_seniors),
+    }
+    assert_disjoint_splits(split_map)
+
+    split_paths = {
+        'train': TRAIN_ROWS_PATH,
+        'val': VAL_ROWS_PATH,
+        'test': TEST_ROWS_PATH,
+    }
+
+    for split_name, seniors in split_map.items():
+        split_df = df[df['senior_id'].isin(seniors)].copy()
+        observed_seniors = set(split_df['senior_id'].unique())
+        missing_seniors = set(seniors) - observed_seniors
+        if missing_seniors:
+            raise ValueError(
+                f"{split_name} split is missing seniors after filtering: "
+                f"{sorted(missing_seniors)[:10]}"
+            )
+        split_df.to_parquet(split_paths[split_name], index=False)
+        logger.info(
+            f"  + Saved {split_name} split rows: {split_df.shape} -> "
+            f"{split_paths[split_name]}"
+        )
+
+    manifest = {
+        'random_seed': RANDOM_SEED,
+        'split_unit': 'senior_id',
+        'train_seniors': list(map(str, train_seniors)),
+        'val_seniors': list(map(str, val_seniors)),
+        'test_seniors': list(map(str, test_seniors)),
+        'paths': {name: str(path) for name, path in split_paths.items()},
+    }
+    with open(SPLIT_MANIFEST_PATH, 'w') as f:
+        json.dump(manifest, f, indent=2)
+
+    logger.info(f"  + Saved split manifest -> {SPLIT_MANIFEST_PATH}")
 
 
 def load_and_clean_data(parquet_path: Path) -> pd.DataFrame:
@@ -79,6 +152,11 @@ def split_seniors(df: pd.DataFrame) -> Tuple[List, List, List]:
     test_seniors = shuffled[val_idx:]
     
     logger.info(f"Train: {len(train_seniors)}, Val: {len(val_seniors)}, Test: {len(test_seniors)}")
+    assert_disjoint_splits({
+        'train': train_seniors,
+        'val': val_seniors,
+        'test': test_seniors,
+    })
     
     return train_seniors, val_seniors, test_seniors
 
@@ -126,14 +204,15 @@ def generate_training_data(df, train_seniors, seq_len, feature_cols):
                   (df['label_1'] == 0) & (df['label_2'] == 0) & (df['label_3'] == 0)
     normal_mask_series = pd.Series(normal_mask, index=df.index)
 
-    for idx, senior_id in enumerate(train_seniors):
-        senior_indices = df[df['senior_id'] == senior_id].index
-        df_senior = df.loc[senior_indices].reset_index(drop=True)
+    train_df = df[df['senior_id'].isin(train_seniors)].copy()
+
+    for idx, (senior_id, df_senior_raw) in enumerate(train_df.groupby('senior_id', sort=False)):
+        df_senior = df_senior_raw.reset_index(drop=True)
         
         if len(df_senior) < seq_len:
             continue
             
-        mask_senior = normal_mask_series.loc[senior_indices].reset_index(drop=True)
+        mask_senior = normal_mask_series.loc[df_senior_raw.index].reset_index(drop=True)
         senior_features = df_senior[feature_cols].values.astype(np.float32)
         sequences = []
         n_rows = len(df_senior)
@@ -188,11 +267,10 @@ def generate_testing_data(df, test_seniors, seq_len, feature_cols, split_label: 
     pos_windows = []
     neg_candidates = []
     
-    for senior_id in test_seniors:
-        senior_indices = test_df[test_df['senior_id'] == senior_id].index
-        df_senior = test_df.loc[senior_indices]
+    for senior_id, df_senior in test_df.groupby('senior_id', sort=False):
+        df_senior = df_senior.sort_values('timestamp').reset_index(drop=True)
         
-        if len(df_senior) < seq_len:
+        if len(df_senior) <= seq_len:
             continue
         
         feats = df_senior[feature_cols].values.astype(np.float32)
@@ -202,15 +280,27 @@ def generate_testing_data(df, test_seniors, seq_len, feature_cols, split_label: 
         l3 = df_senior['label_3'].values
         n_rows = len(df_senior)
         
-        for i in range(seq_len, n_rows):
-            if l3[i-1] == 1:
-                pos_windows.append(feats[i-seq_len : i])
+        # The target row is deliberately outside the lookback window. Requiring
+        # normal labels inside the input prevents the target from being derived
+        # from any timestamp contained in X[t-window_size:t].
+        for target_idx in range(seq_len, n_rows):
+            window_start = target_idx - seq_len
+            window_end = target_idx
+            window_is_pure_normal = (
+                l1[window_start:window_end].sum() == 0 and
+                l2[window_start:window_end].sum() == 0 and
+                l3[window_start:window_end].sum() == 0
+            )
+            if window_is_pure_normal and l3[target_idx] == 1:
+                pos_windows.append(feats[window_start:window_end])
                 
-        for i in range(0, n_rows - seq_len + 1, seq_len):
-            if (l1[i:i+seq_len].sum() == 0) and \
-               (l2[i:i+seq_len].sum() == 0) and \
-               (l3[i:i+seq_len].sum() == 0):
-                neg_candidates.append(feats[i:i+seq_len])
+        for target_idx in range(seq_len, n_rows, seq_len):
+            window_start = target_idx - seq_len
+            window_end = target_idx
+            if (l1[window_start:window_end + 1].sum() == 0) and \
+               (l2[window_start:window_end + 1].sum() == 0) and \
+               (l3[window_start:window_end + 1].sum() == 0):
+                neg_candidates.append(feats[window_start:window_end])
                 
     n_pos = len(pos_windows)
     n_neg = len(neg_candidates)
@@ -319,6 +409,7 @@ def main():
     
     df = load_and_clean_data(PARQUET_PATH)
     train_seniors, val_seniors, test_seniors = split_seniors(df)
+    write_subjectwise_split_artifacts(df, train_seniors, val_seniors, test_seniors)
     feature_cols = get_feature_columns(df)
     X_train = generate_training_data(df, train_seniors, SEQ_LEN, feature_cols)
     X_val, y_val = generate_testing_data(df, val_seniors, SEQ_LEN, feature_cols, split_label="VALIDATION")

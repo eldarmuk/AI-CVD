@@ -38,21 +38,33 @@ class Config:
 # --- UTILS ---
 def get_normalization_stats(npy_path: Path) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Computes global Mean/Std from .npy file, ignoring NaNs.
+    Computes Mean/Std from the training .npy file only, ignoring NaNs.
     Uses chunked processing to handle large datasets within RAM limits.
     """
+    expected_source = str(npy_path.resolve())
     if Config.STATS_PATH.exists():
-        print(f"+ Loading cached stats from {Config.STATS_PATH}")
         with open(Config.STATS_PATH, 'r') as f:
             stats = json.load(f)
-        return np.array(stats['mean'], dtype=np.float32), np.array(stats['std'], dtype=np.float32)
+        if (
+            stats.get('fit_split') == 'train'
+            and stats.get('source_path') == expected_source
+            and stats.get('seq_len') == Config.SEQ_LEN
+            and stats.get('n_features') == Config.N_FEATURES
+        ):
+            print(f"+ Loading cached train-only stats from {Config.STATS_PATH}")
+            return np.array(stats['mean'], dtype=np.float32), np.array(stats['std'], dtype=np.float32)
+        print("+ Ignoring cached normalization stats without matching train-only provenance")
 
-    print(f"+ Computing robust stats from {npy_path} (this may take a moment)...")
+    print(f"+ Fitting normalization stats on TRAIN data only: {npy_path}")
     
-    # Memmap for zero-copy access
-    X = np.memmap(npy_path, dtype='float32', mode='r')
-    n_samples = X.shape[0] // (Config.SEQ_LEN * Config.N_FEATURES)
-    X = X.reshape(n_samples, Config.SEQ_LEN, Config.N_FEATURES)
+    # Memmap for zero-copy access while preserving the .npy header shape.
+    X = np.load(npy_path, mmap_mode='r')
+    if X.ndim != 3 or X.shape[1:] != (Config.SEQ_LEN, Config.N_FEATURES):
+        raise ValueError(
+            f"Expected training array shape (n, {Config.SEQ_LEN}, {Config.N_FEATURES}), "
+            f"got {X.shape}"
+        )
+    n_samples = X.shape[0]
     
     # Accumulators
     feat_sum = np.zeros(Config.N_FEATURES)
@@ -83,7 +95,16 @@ def get_normalization_stats(npy_path: Path) -> Tuple[np.ndarray, np.ndarray]:
 
     Config.STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(Config.STATS_PATH, 'w') as f:
-        json.dump({"mean": mean.tolist(), "std": std.tolist()}, f)
+        json.dump({
+            "mean": mean.tolist(),
+            "std": std.tolist(),
+            "fit_split": "train",
+            "source_path": expected_source,
+            "source_shape": list(X.shape),
+            "seq_len": Config.SEQ_LEN,
+            "n_features": Config.N_FEATURES,
+            "nan_policy": "ignore_when_fitting_fill_with_train_mean_when_transforming",
+        }, f, indent=2)
         
     return mean.astype(np.float32), std.astype(np.float32)
 
