@@ -10,6 +10,8 @@ This pipeline keeps the expensive work inside DuckDB:
 
 from pathlib import Path
 import argparse
+from datetime import datetime
+import shutil
 import duckdb
 
 
@@ -37,12 +39,15 @@ RISK_COLUMNS = [
 ]
 
 
-def build_feature_sql() -> str:
+def build_feature_sql(senior_min: int | None = None, senior_max: int | None = None) -> str:
     risk_selects = ",\n            ".join(
         f"CAST(coalesce(r.{col}, 0) AS TINYINT) AS "
         f"{'other' if col == 'unclassified' else col}"
         for col in RISK_COLUMNS
     )
+    senior_filter = ""
+    if senior_min is not None and senior_max is not None:
+        senior_filter = f"AND senior_id BETWEEN {int(senior_min)} AND {int(senior_max)}"
 
     return f"""
         WITH typed_measurements AS (
@@ -56,6 +61,7 @@ def build_feature_sql() -> str:
                 CAST(pulse_pressure AS FLOAT) AS pulse_pressure
             FROM hrp.measurements
             WHERE date IS NOT NULL
+              {senior_filter}
         ),
         measurement_buckets AS (
             SELECT
@@ -93,6 +99,7 @@ def build_feature_sql() -> str:
                 ) AS prev_alert_ts
             FROM hrp.alerts
             WHERE alert_date IS NOT NULL
+              {senior_filter}
         ),
         compressed_alerts AS (
             SELECT alert_id, senior_id, alert_ts, severity
@@ -219,30 +226,92 @@ def build_feature_sql() -> str:
     """
 
 
-def export_multimodal_features(db_path: Path, output_path: Path, threads: int) -> None:
+def chunked(iterable: list[int], size: int) -> list[list[int]]:
+    return [iterable[i:i + size] for i in range(0, len(iterable), size)]
+
+
+def prepare_output_path(output_path: Path, temp_output_path: Path) -> None:
+    if temp_output_path.exists():
+        if temp_output_path.is_dir():
+            shutil.rmtree(temp_output_path)
+        else:
+            temp_output_path.unlink()
+    temp_output_path.mkdir(parents=True, exist_ok=True)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def replace_output_atomically(output_path: Path, temp_output_path: Path) -> None:
+    if output_path.exists():
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = output_path.with_name(f"{output_path.name}.backup_{timestamp}")
+        output_path.rename(backup_path)
+        print(f"Previous output moved to: {backup_path}")
+
+    temp_output_path.rename(output_path)
+
+
+def export_multimodal_features(
+    db_path: Path,
+    output_path: Path,
+    threads: int,
+    memory_limit: str,
+    senior_chunk_size: int,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_output_path = output_path.with_name(f".{output_path.name}.tmp_parts")
+    duckdb_temp_dir = output_path.parent / ".duckdb_tmp"
+    duckdb_temp_dir.mkdir(parents=True, exist_ok=True)
+    prepare_output_path(output_path, temp_output_path)
 
     con = duckdb.connect()
     con.execute("SET preserve_insertion_order=false;")
     con.execute(f"SET threads={threads};")
+    con.execute(f"SET memory_limit='{memory_limit}';")
+    con.execute(f"SET temp_directory='{duckdb_temp_dir}';")
     con.execute("INSTALL sqlite;")
     con.execute("LOAD sqlite;")
     con.execute(f"ATTACH '{db_path}' AS hrp (TYPE sqlite, READ_ONLY true);")
 
-    feature_sql = build_feature_sql()
-    copy_sql = f"""
-        COPY (
-            {feature_sql}
-        )
-        TO '{output_path}'
-        (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);
-    """
-
     print(f"Exporting 5-minute multimodal features from {db_path}")
-    print(f"Output: {output_path}")
-    con.execute(copy_sql)
+    print(f"Output dataset directory: {output_path}")
+    print(f"Threads: {threads}; memory_limit: {memory_limit}; senior_chunk_size: {senior_chunk_size}")
+
+    senior_ids = [
+        row[0] for row in con.execute(
+            """
+            SELECT DISTINCT CAST(senior_id AS INTEGER) AS senior_id
+            FROM hrp.measurements
+            WHERE date IS NOT NULL
+            ORDER BY senior_id
+            """
+        ).fetchall()
+    ]
+    if not senior_ids:
+        raise RuntimeError("No measurement seniors found in processed database.")
+
+    chunks = chunked(senior_ids, senior_chunk_size)
+    for idx, senior_chunk in enumerate(chunks):
+        senior_min = senior_chunk[0]
+        senior_max = senior_chunk[-1]
+        part_path = temp_output_path / f"part_{idx:05d}_senior_{senior_min}_{senior_max}.parquet"
+        feature_sql = build_feature_sql(senior_min=senior_min, senior_max=senior_max)
+        copy_sql = f"""
+            COPY (
+                {feature_sql}
+            )
+            TO '{part_path}'
+            (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);
+        """
+        print(
+            f"[{idx + 1:,}/{len(chunks):,}] seniors {senior_min}..{senior_max} "
+            f"({len(senior_chunk):,} ids)"
+        )
+        con.execute(copy_sql)
+
     con.close()
-    print("DuckDB Parquet export complete.")
+    replace_output_atomically(output_path, temp_output_path)
+    print("DuckDB chunked Parquet export complete.")
 
 
 def parse_args() -> argparse.Namespace:
@@ -251,13 +320,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH)
-    parser.add_argument("--threads", type=int, default=8)
+    parser.add_argument("--threads", type=int, default=2)
+    parser.add_argument("--memory-limit", default="12GB")
+    parser.add_argument("--senior-chunk-size", type=int, default=250)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    export_multimodal_features(args.db, args.output, args.threads)
+    export_multimodal_features(
+        args.db,
+        args.output,
+        args.threads,
+        args.memory_limit,
+        args.senior_chunk_size,
+    )
 
 
 if __name__ == "__main__":
