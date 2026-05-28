@@ -5,6 +5,9 @@ This pipeline keeps the expensive work inside DuckDB:
 - 5-minute time_bucket() aggregation of measurements
 - 10-minute burst-alert compression, keeping only the first alert per burst
 - feature typing/downcasting before Parquet materialization
+- per-vital measurement sparsity timers
+- cyclical hour encodings for circadian alert rhythms
+- static clinical domain flags merged into every timestamp
 - native ORDER BY senior_id, timestamp for sequential batching
 """
 
@@ -71,9 +74,18 @@ def build_feature_sql(senior_min: int | None = None, senior_max: int | None = No
                 CAST(avg(CASE WHEN type = 'Heartrate' THEN value END) AS FLOAT) AS heartrate,
                 CAST(avg(CASE WHEN type = 'BloodPressure' THEN sbp END) AS FLOAT) AS sbp,
                 CAST(avg(CASE WHEN type = 'BloodPressure' THEN dbp END) AS FLOAT) AS dbp,
-                CAST(avg(CASE WHEN type = 'BloodPressure' THEN pulse_pressure END) AS FLOAT) AS pulse_pressure,
+                CAST(
+                    avg(CASE WHEN type = 'BloodPressure' THEN sbp END)
+                    - avg(CASE WHEN type = 'BloodPressure' THEN dbp END)
+                    AS FLOAT
+                ) AS pulse_pressure,
                 CAST(sum(CASE WHEN type = 'Steps' THEN value ELSE 0 END) AS FLOAT) AS steps,
-                CAST(avg(CASE WHEN type = 'Saturation' THEN value END) AS FLOAT) AS saturation
+                CAST(avg(CASE WHEN type = 'Saturation' THEN value END) AS FLOAT) AS saturation,
+                max(CASE WHEN type = 'Temperature' THEN meas_ts END) AS latest_temperature_ts,
+                max(CASE WHEN type = 'Heartrate' THEN meas_ts END) AS latest_heartrate_ts,
+                max(CASE WHEN type = 'BloodPressure' THEN meas_ts END) AS latest_bloodpressure_ts,
+                max(CASE WHEN type = 'Steps' THEN meas_ts END) AS latest_steps_ts,
+                max(CASE WHEN type = 'Saturation' THEN meas_ts END) AS latest_saturation_ts
             FROM typed_measurements
             GROUP BY senior_id, time_bucket(INTERVAL '{BUCKET_SIZE}', meas_ts)
         ),
@@ -132,6 +144,8 @@ def build_feature_sql(senior_min: int | None = None, senior_max: int | None = No
                     RANGE BETWEEN INTERVAL '3 hours' PRECEDING AND CURRENT ROW
                 ) AS FLOAT) AS bp_trend,
                 CAST(extract(hour FROM g.bucket_ts) AS TINYINT) AS hour,
+                CAST(sin(2 * pi() * extract(hour FROM g.bucket_ts) / 24.0) AS FLOAT) AS hour_sin,
+                CAST(cos(2 * pi() * extract(hour FROM g.bucket_ts) / 24.0) AS FLOAT) AS hour_cos,
                 CAST(CASE
                     WHEN extract(hour FROM g.bucket_ts) BETWEEN 0 AND 5 THEN 1
                     ELSE 0
@@ -146,7 +160,70 @@ def build_feature_sql(senior_min: int | None = None, senior_max: int | None = No
                     THEN mb.heartrate / mb.dbp
                     ELSE NULL
                 END AS FLOAT) AS shock_index,
-                CAST(extract(dow FROM g.bucket_ts) AS TINYINT) AS day_of_week
+                CAST(extract(dow FROM g.bucket_ts) AS TINYINT) AS day_of_week,
+                CAST(date_diff(
+                    'minute',
+                    max(mb.latest_temperature_ts) OVER (
+                        PARTITION BY g.senior_id
+                        ORDER BY g.bucket_ts
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ),
+                    g.bucket_ts
+                ) AS FLOAT) AS time_since_last_temperature,
+                CAST(date_diff(
+                    'minute',
+                    max(mb.latest_heartrate_ts) OVER (
+                        PARTITION BY g.senior_id
+                        ORDER BY g.bucket_ts
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ),
+                    g.bucket_ts
+                ) AS FLOAT) AS time_since_last_heartrate,
+                CAST(date_diff(
+                    'minute',
+                    max(mb.latest_bloodpressure_ts) OVER (
+                        PARTITION BY g.senior_id
+                        ORDER BY g.bucket_ts
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ),
+                    g.bucket_ts
+                ) AS FLOAT) AS time_since_last_sbp,
+                CAST(date_diff(
+                    'minute',
+                    max(mb.latest_bloodpressure_ts) OVER (
+                        PARTITION BY g.senior_id
+                        ORDER BY g.bucket_ts
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ),
+                    g.bucket_ts
+                ) AS FLOAT) AS time_since_last_dbp,
+                CAST(date_diff(
+                    'minute',
+                    max(mb.latest_bloodpressure_ts) OVER (
+                        PARTITION BY g.senior_id
+                        ORDER BY g.bucket_ts
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ),
+                    g.bucket_ts
+                ) AS FLOAT) AS time_since_last_pulse_pressure,
+                CAST(date_diff(
+                    'minute',
+                    max(mb.latest_steps_ts) OVER (
+                        PARTITION BY g.senior_id
+                        ORDER BY g.bucket_ts
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ),
+                    g.bucket_ts
+                ) AS FLOAT) AS time_since_last_steps,
+                CAST(date_diff(
+                    'minute',
+                    max(mb.latest_saturation_ts) OVER (
+                        PARTITION BY g.senior_id
+                        ORDER BY g.bucket_ts
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ),
+                    g.bucket_ts
+                ) AS FLOAT) AS time_since_last_saturation
             FROM time_grid g
             LEFT JOIN measurement_buckets mb
               ON g.senior_id = mb.senior_id
@@ -199,8 +276,17 @@ def build_feature_sql(senior_min: int | None = None, senior_max: int | None = No
             bf.hr_volatility,
             bf.bp_trend,
             bf.hour,
+            bf.hour_sin,
+            bf.hour_cos,
             bf.is_night,
             bf.steps_rolling_sum_6h,
+            bf.time_since_last_temperature,
+            bf.time_since_last_heartrate,
+            bf.time_since_last_sbp,
+            bf.time_since_last_dbp,
+            bf.time_since_last_pulse_pressure,
+            bf.time_since_last_steps,
+            bf.time_since_last_saturation,
             {risk_selects},
             CAST(s.age AS SMALLINT) AS age,
             CAST(CASE
