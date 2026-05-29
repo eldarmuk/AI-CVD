@@ -20,7 +20,7 @@ import logging
 from typing import Tuple, List, Dict
 import shutil
 
-from ..components.utils import get_feature_columns
+from src.components.utils import get_feature_columns
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,10 +30,11 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).parent.parent.parent / 'data' / 'processed'
 PARQUET_PATH = DATA_DIR / 'multimodal_features.parquet'
 OUTPUT_DIR = DATA_DIR / 'anomaly_detection'
-SEQ_LEN = 96
+SEQ_LEN = int(os.getenv("SEQ_LEN", "96"))
 STEP_CAP = 2000
 RANDOM_SEED = 42
 TRAIN_STRIDE = 11
+TRAIN_MAX_WINDOWS = int(os.getenv("TRAIN_MAX_WINDOWS", "500000"))
 
 X_TRAIN_PATH = OUTPUT_DIR / 'X_train.npy'
 X_VAL_PATH = OUTPUT_DIR / 'X_val.npy'
@@ -45,6 +46,304 @@ SPLIT_MANIFEST_PATH = OUTPUT_DIR / 'split_manifest.json'
 TRAIN_ROWS_PATH = OUTPUT_DIR / 'train_rows.parquet'
 VAL_ROWS_PATH = OUTPUT_DIR / 'val_rows.parquet'
 TEST_ROWS_PATH = OUTPUT_DIR / 'test_rows.parquet'
+
+
+def get_parquet_scan_path(parquet_path: Path) -> str:
+    """Return a DuckDB read_parquet path for a file or Parquet dataset directory."""
+    if parquet_path.is_dir():
+        return (parquet_path / "*.parquet").as_posix()
+    return parquet_path.as_posix()
+
+
+def discover_dataset_metadata(parquet_path: Path) -> Tuple[List[str], List]:
+    """Read only metadata/senior ids via DuckDB; never materialize all rows."""
+    import duckdb
+
+    scan_path = get_parquet_scan_path(parquet_path)
+    con = duckdb.connect()
+    columns = [
+        row[0] for row in con.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{scan_path}')"
+        ).fetchall()
+    ]
+    seniors = [
+        row[0] for row in con.execute(
+            f"""
+            SELECT DISTINCT senior_id
+            FROM read_parquet('{scan_path}')
+            ORDER BY senior_id
+            """
+        ).fetchall()
+    ]
+    con.close()
+    return columns, seniors
+
+
+def split_senior_ids(unique_seniors: List) -> Tuple[List, List, List]:
+    """Split already-discovered senior ids 70/15/15."""
+    n_seniors = len(unique_seniors)
+    random.seed(RANDOM_SEED)
+    shuffled = list(unique_seniors)
+    random.shuffle(shuffled)
+
+    train_idx = int(n_seniors * 0.70)
+    val_idx = int(n_seniors * 0.85)
+
+    train_seniors = shuffled[:train_idx]
+    val_seniors = shuffled[train_idx:val_idx]
+    test_seniors = shuffled[val_idx:]
+
+    logger.info(f"Train: {len(train_seniors)}, Val: {len(val_seniors)}, Test: {len(test_seniors)}")
+    assert_disjoint_splits({
+        'train': train_seniors,
+        'val': val_seniors,
+        'test': test_seniors,
+    })
+    return train_seniors, val_seniors, test_seniors
+
+
+def write_split_manifest(train_seniors: List, val_seniors: List, test_seniors: List) -> None:
+    """Persist subject-wise split ids without duplicating the full Parquet dataset."""
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    split_map = {
+        'train': list(train_seniors),
+        'val': list(val_seniors),
+        'test': list(test_seniors),
+    }
+    assert_disjoint_splits(split_map)
+    manifest = {
+        'random_seed': RANDOM_SEED,
+        'split_unit': 'senior_id',
+        'train_seniors': list(map(str, train_seniors)),
+        'val_seniors': list(map(str, val_seniors)),
+        'test_seniors': list(map(str, test_seniors)),
+        'note': 'Rows are streamed from multimodal_features.parquet; full split parquet copies are not materialized.',
+    }
+    with open(SPLIT_MANIFEST_PATH, 'w') as f:
+        json.dump(manifest, f, indent=2)
+    logger.info(f"  + Saved split manifest -> {SPLIT_MANIFEST_PATH}")
+
+
+def iter_parquet_files(parquet_path: Path) -> List[Path]:
+    if parquet_path.is_dir():
+        return sorted(parquet_path.glob("*.parquet"))
+    return [parquet_path]
+
+
+def clean_streamed_part(df: pd.DataFrame) -> pd.DataFrame:
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    if 'steps' in df.columns:
+        df['steps'] = df['steps'].clip(upper=STEP_CAP)
+    return df.sort_values(['senior_id', 'timestamp']).reset_index(drop=True)
+
+
+def iter_senior_frames(
+    parquet_path: Path,
+    seniors: set,
+    columns: List[str],
+) -> pd.DataFrame:
+    for part_path in iter_parquet_files(parquet_path):
+        df_part = pd.read_parquet(part_path, columns=columns)
+        df_part = df_part[df_part['senior_id'].isin(seniors)]
+        if df_part.empty:
+            continue
+        df_part = clean_streamed_part(df_part)
+        for _, df_senior in df_part.groupby('senior_id', sort=False):
+            yield df_senior.reset_index(drop=True)
+
+
+def normal_window_starts(df_senior: pd.DataFrame, seq_len: int, stride: int) -> np.ndarray:
+    n_rows = len(df_senior)
+    if n_rows < seq_len:
+        return np.array([], dtype=np.int64)
+
+    normal = (
+        (df_senior['label_1'].to_numpy() == 0) &
+        (df_senior['label_2'].to_numpy() == 0) &
+        (df_senior['label_3'].to_numpy() == 0)
+    ).astype(np.int32)
+    prefix = np.concatenate([[0], np.cumsum(normal)])
+    starts = np.arange(0, n_rows - seq_len + 1, stride, dtype=np.int64)
+    valid = (prefix[starts + seq_len] - prefix[starts]) == seq_len
+    return starts[valid]
+
+
+def count_training_windows_streaming(
+    parquet_path: Path,
+    train_seniors: List,
+    read_columns: List[str],
+    seq_len: int,
+) -> int:
+    total = 0
+    for idx, df_senior in enumerate(iter_senior_frames(parquet_path, set(train_seniors), read_columns)):
+        total += len(normal_window_starts(df_senior, seq_len, TRAIN_STRIDE))
+        if (idx + 1) % 500 == 0:
+            logger.info(f"   Counted {idx + 1:,} train seniors; candidate windows: {total:,}")
+    return total
+
+
+def generate_training_data_streaming(
+    parquet_path: Path,
+    train_seniors: List,
+    seq_len: int,
+    feature_cols: List[str],
+    read_columns: List[str],
+):
+    logger.info(f"Generating TRAINING data stream (Stride={TRAIN_STRIDE})...")
+    total_candidates = count_training_windows_streaming(parquet_path, train_seniors, read_columns, seq_len)
+    if total_candidates == 0:
+        return np.array([])
+
+    n_selected = min(total_candidates, TRAIN_MAX_WINDOWS) if TRAIN_MAX_WINDOWS > 0 else total_candidates
+    rng = np.random.default_rng(RANDOM_SEED)
+    selected_global = np.sort(rng.choice(total_candidates, size=n_selected, replace=False))
+
+    logger.info(f"Training normal windows: {total_candidates:,}; selected: {n_selected:,}")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    X_train = np.lib.format.open_memmap(
+        X_TRAIN_PATH,
+        dtype='float32',
+        mode='w+',
+        shape=(n_selected, seq_len, len(feature_cols)),
+    )
+
+    global_idx = 0
+    write_idx = 0
+    selected_ptr = 0
+    selected_count = len(selected_global)
+
+    for senior_idx, df_senior in enumerate(iter_senior_frames(parquet_path, set(train_seniors), read_columns)):
+        starts = normal_window_starts(df_senior, seq_len, TRAIN_STRIDE)
+        if len(starts) == 0:
+            continue
+
+        feats = df_senior[feature_cols].to_numpy(dtype=np.float32, copy=True)
+        for start in starts:
+            if selected_ptr >= selected_count:
+                break
+            if global_idx == selected_global[selected_ptr]:
+                X_train[write_idx] = feats[start:start + seq_len]
+                write_idx += 1
+                selected_ptr += 1
+                if write_idx % 25000 == 0:
+                    X_train.flush()
+                    logger.info(f"   Wrote {write_idx:,}/{n_selected:,} train windows")
+            global_idx += 1
+
+        if (senior_idx + 1) % 500 == 0:
+            logger.info(f"   Processed {senior_idx + 1:,} train seniors")
+
+    X_train.flush()
+    logger.info(f"Saved X_train.npy ({X_train.nbytes / 1e9:.2f} GB)")
+    return X_train
+
+
+def collect_eval_candidates_streaming(
+    parquet_path: Path,
+    seniors: List,
+    seq_len: int,
+    feature_cols: List[str],
+    read_columns: List[str],
+    split_label: str,
+) -> Tuple[List[np.ndarray], int]:
+    pos_windows = []
+    neg_count = 0
+
+    for df_senior in iter_senior_frames(parquet_path, set(seniors), read_columns):
+        if len(df_senior) <= seq_len:
+            continue
+        feats = df_senior[feature_cols].to_numpy(dtype=np.float32, copy=True)
+        l1 = df_senior['label_1'].to_numpy()
+        l2 = df_senior['label_2'].to_numpy()
+        l3 = df_senior['label_3'].to_numpy()
+        n_rows = len(df_senior)
+
+        normal = ((l1 == 0) & (l2 == 0) & (l3 == 0)).astype(np.int32)
+        prefix = np.concatenate([[0], np.cumsum(normal)])
+
+        for target_idx in range(seq_len, n_rows):
+            window_start = target_idx - seq_len
+            window_is_pure_normal = (prefix[target_idx] - prefix[window_start]) == seq_len
+            if window_is_pure_normal and l3[target_idx] == 1:
+                pos_windows.append(feats[window_start:target_idx])
+
+        neg_targets = np.arange(seq_len, n_rows, seq_len, dtype=np.int64)
+        if len(neg_targets):
+            neg_valid = (prefix[neg_targets + 1] - prefix[neg_targets - seq_len]) == (seq_len + 1)
+            neg_count += int(neg_valid.sum())
+
+    logger.info(f"{split_label}: positive windows={len(pos_windows):,}; negative candidates={neg_count:,}")
+    return pos_windows, neg_count
+
+
+def sample_negative_windows_streaming(
+    parquet_path: Path,
+    seniors: List,
+    seq_len: int,
+    feature_cols: List[str],
+    read_columns: List[str],
+    selected_neg_indices: np.ndarray,
+) -> List[np.ndarray]:
+    neg_windows = []
+    global_neg_idx = 0
+    selected_ptr = 0
+    selected_count = len(selected_neg_indices)
+
+    for df_senior in iter_senior_frames(parquet_path, set(seniors), read_columns):
+        if len(df_senior) <= seq_len or selected_ptr >= selected_count:
+            continue
+        feats = df_senior[feature_cols].to_numpy(dtype=np.float32, copy=True)
+        l1 = df_senior['label_1'].to_numpy()
+        l2 = df_senior['label_2'].to_numpy()
+        l3 = df_senior['label_3'].to_numpy()
+        n_rows = len(df_senior)
+
+        normal = ((l1 == 0) & (l2 == 0) & (l3 == 0)).astype(np.int32)
+        prefix = np.concatenate([[0], np.cumsum(normal)])
+
+        for target_idx in range(seq_len, n_rows, seq_len):
+            if selected_ptr >= selected_count:
+                break
+            window_start = target_idx - seq_len
+            is_negative = (prefix[target_idx + 1] - prefix[window_start]) == (seq_len + 1)
+            if not is_negative:
+                continue
+            if global_neg_idx == selected_neg_indices[selected_ptr]:
+                neg_windows.append(feats[window_start:target_idx])
+                selected_ptr += 1
+            global_neg_idx += 1
+
+    return neg_windows
+
+
+def generate_testing_data_streaming(
+    parquet_path: Path,
+    seniors: List,
+    seq_len: int,
+    feature_cols: List[str],
+    read_columns: List[str],
+    split_label: str,
+):
+    logger.info(f"Generating {split_label} data stream...")
+    pos_windows, neg_count = collect_eval_candidates_streaming(
+        parquet_path, seniors, seq_len, feature_cols, read_columns, split_label
+    )
+    n_pos = len(pos_windows)
+    if n_pos == 0:
+        logger.warning(f"No anomaly windows found in {split_label} set!")
+        return np.array([]), np.array([])
+
+    n_sample = min(n_pos, neg_count)
+    rng = np.random.default_rng(RANDOM_SEED)
+    selected_neg_indices = np.sort(rng.choice(neg_count, size=n_sample, replace=False))
+    neg_windows = sample_negative_windows_streaming(
+        parquet_path, seniors, seq_len, feature_cols, read_columns, selected_neg_indices
+    )
+
+    X = np.array(pos_windows[:n_sample] + neg_windows, dtype=np.float32)
+    y = np.array([1] * n_sample + [0] * n_sample, dtype=np.int32)
+    idx = rng.permutation(len(X))
+    return X[idx], y[idx]
 
 
 def assert_disjoint_splits(split_map: Dict[str, List]) -> None:
@@ -406,14 +705,28 @@ def main():
     logger.info("=" * 100)
     logger.info("PHASE 3 (REVISION) - ANOMALY DETECTION DATASET GENERATION")
     logger.info("=" * 100)
-    
-    df = load_and_clean_data(PARQUET_PATH)
-    train_seniors, val_seniors, test_seniors = split_seniors(df)
-    write_subjectwise_split_artifacts(df, train_seniors, val_seniors, test_seniors)
-    feature_cols = get_feature_columns(df)
-    X_train = generate_training_data(df, train_seniors, SEQ_LEN, feature_cols)
-    X_val, y_val = generate_testing_data(df, val_seniors, SEQ_LEN, feature_cols, split_label="VALIDATION")
-    X_test, y_test = generate_testing_data(df, test_seniors, SEQ_LEN, feature_cols, split_label="TEST")
+
+    logger.info(f"Discovering Parquet metadata from {PARQUET_PATH}...")
+    columns, unique_seniors = discover_dataset_metadata(PARQUET_PATH)
+    logger.info(f"Columns: {len(columns)}; seniors: {len(unique_seniors):,}")
+
+    train_seniors, val_seniors, test_seniors = split_senior_ids(unique_seniors)
+    write_split_manifest(train_seniors, val_seniors, test_seniors)
+
+    feature_cols = get_feature_columns(pd.DataFrame(columns=columns))
+    read_columns = list(dict.fromkeys(['senior_id', 'timestamp', 'label_1', 'label_2', 'label_3'] + feature_cols))
+    logger.info(f"Model features: {len(feature_cols)}")
+    logger.info(f"TRAIN_MAX_WINDOWS: {TRAIN_MAX_WINDOWS:,} (set env TRAIN_MAX_WINDOWS=0 for all windows)")
+
+    X_train = generate_training_data_streaming(
+        PARQUET_PATH, train_seniors, SEQ_LEN, feature_cols, read_columns
+    )
+    X_val, y_val = generate_testing_data_streaming(
+        PARQUET_PATH, val_seniors, SEQ_LEN, feature_cols, read_columns, split_label="VALIDATION"
+    )
+    X_test, y_test = generate_testing_data_streaming(
+        PARQUET_PATH, test_seniors, SEQ_LEN, feature_cols, read_columns, split_label="TEST"
+    )
     
     if len(X_train) == 0:
         logger.error("Training data is empty! Aborting.")
