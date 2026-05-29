@@ -12,6 +12,7 @@ Key Features:
 
 import os
 import json
+import sqlite3
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -29,6 +30,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).parent.parent.parent / 'data' / 'processed'
 PARQUET_PATH = DATA_DIR / 'multimodal_features.parquet'
+PROCESSED_DB_PATH = Path(__file__).parent.parent.parent / 'db' / 'hrp_processed.db'
 OUTPUT_DIR = DATA_DIR / 'anomaly_detection'
 SEQ_LEN = int(os.getenv("SEQ_LEN", "96"))
 STEP_CAP = 2000
@@ -42,6 +44,7 @@ X_TEST_PATH = OUTPUT_DIR / 'X_test.npy'
 Y_VAL_PATH = OUTPUT_DIR / 'y_val.npy'
 Y_TEST_PATH = OUTPUT_DIR / 'y_test.npy'
 METADATA_PATH = OUTPUT_DIR / 'anomaly_dataset_metadata.txt'
+STATS_PATH = OUTPUT_DIR / 'normalization_stats.json'
 SPLIT_MANIFEST_PATH = OUTPUT_DIR / 'split_manifest.json'
 TRAIN_ROWS_PATH = OUTPUT_DIR / 'train_rows.parquet'
 VAL_ROWS_PATH = OUTPUT_DIR / 'val_rows.parquet'
@@ -55,7 +58,7 @@ def get_parquet_scan_path(parquet_path: Path) -> str:
     return parquet_path.as_posix()
 
 
-def discover_dataset_metadata(parquet_path: Path) -> Tuple[List[str], List]:
+def discover_dataset_metadata(parquet_path: Path) -> Tuple[List[str], List, set]:
     """Read only metadata/senior ids via DuckDB; never materialize all rows."""
     import duckdb
 
@@ -75,8 +78,43 @@ def discover_dataset_metadata(parquet_path: Path) -> Tuple[List[str], List]:
             """
         ).fetchall()
     ]
+    l3_seniors = {
+        row[0] for row in con.execute(
+            f"""
+            SELECT senior_id
+            FROM read_parquet('{scan_path}')
+            GROUP BY senior_id
+            HAVING max(CAST(label_3 AS INTEGER)) = 1
+            """
+        ).fetchall()
+    }
     con.close()
-    return columns, seniors
+    return columns, seniors, l3_seniors
+
+
+def discover_l3_alert_seniors_from_db(db_path: Path) -> set:
+    """Read true Level 3 alert history from the processed database when available."""
+    if not db_path.exists():
+        logger.warning(f"Processed DB not found for Level 3 senior audit: {db_path}")
+        return set()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        alert_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(alerts)").fetchall()
+        }
+        if 'severity' not in alert_cols:
+            logger.warning(
+                "Skipping DB Level 3 senior audit because alerts.severity is absent; "
+                "using Parquet label_3 history only."
+            )
+            return set()
+        rows = conn.execute(
+            "SELECT DISTINCT senior_id FROM alerts WHERE severity = 3"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {row[0] for row in rows}
 
 
 def split_senior_ids(unique_seniors: List) -> Tuple[List, List, List]:
@@ -102,7 +140,13 @@ def split_senior_ids(unique_seniors: List) -> Tuple[List, List, List]:
     return train_seniors, val_seniors, test_seniors
 
 
-def write_split_manifest(train_seniors: List, val_seniors: List, test_seniors: List) -> None:
+def write_split_manifest(
+    train_seniors: List,
+    train_pure_healthy_seniors: List,
+    train_l3_excluded_seniors: List,
+    val_seniors: List,
+    test_seniors: List,
+) -> None:
     """Persist subject-wise split ids without duplicating the full Parquet dataset."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     split_map = {
@@ -115,8 +159,11 @@ def write_split_manifest(train_seniors: List, val_seniors: List, test_seniors: L
         'random_seed': RANDOM_SEED,
         'split_unit': 'senior_id',
         'train_seniors': list(map(str, train_seniors)),
+        'train_pure_healthy_seniors': list(map(str, train_pure_healthy_seniors)),
+        'train_l3_excluded_seniors': list(map(str, train_l3_excluded_seniors)),
         'val_seniors': list(map(str, val_seniors)),
         'test_seniors': list(map(str, test_seniors)),
+        'train_policy': 'X_train uses only train_pure_healthy_seniors: senior_id with zero label_3 rows in entire history.',
         'note': 'Rows are streamed from multimodal_features.parquet; full split parquet copies are not materialized.',
     }
     with open(SPLIT_MANIFEST_PATH, 'w') as f:
@@ -134,6 +181,8 @@ def clean_streamed_part(df: pd.DataFrame) -> pd.DataFrame:
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     if 'steps' in df.columns:
         df['steps'] = df['steps'].clip(upper=STEP_CAP)
+    if 'bp_trend' in df.columns:
+        df['bp_trend'] = df['bp_trend'].fillna(0.0)
     return df.sort_values(['senior_id', 'timestamp']).reset_index(drop=True)
 
 
@@ -344,6 +393,54 @@ def generate_testing_data_streaming(
     y = np.array([1] * n_sample + [0] * n_sample, dtype=np.int32)
     idx = rng.permutation(len(X))
     return X[idx], y[idx]
+
+
+def write_normalization_stats(
+    X_train_path: Path,
+    feature_cols: List[str],
+    train_pure_healthy_seniors: List,
+) -> None:
+    """Fit normalization stats on X_train only and persist reproducibility metadata."""
+    X = np.load(X_train_path, mmap_mode='r')
+    if X.ndim != 3:
+        raise ValueError(f"Expected X_train to have shape (n, seq_len, n_features), got {X.shape}")
+
+    n_features = X.shape[-1]
+    feat_sum = np.zeros(n_features, dtype=np.float64)
+    feat_sq_sum = np.zeros(n_features, dtype=np.float64)
+    feat_count = np.zeros(n_features, dtype=np.float64)
+
+    chunk_size = 25_000
+    for start in range(0, X.shape[0], chunk_size):
+        chunk = np.asarray(X[start:start + chunk_size]).reshape(-1, n_features)
+        mask = ~np.isnan(chunk)
+        valid = np.nan_to_num(chunk, nan=0.0)
+        feat_sum += valid.sum(axis=0)
+        feat_sq_sum += (valid ** 2).sum(axis=0)
+        feat_count += mask.sum(axis=0)
+
+    mean = feat_sum / np.maximum(feat_count, 1)
+    mean_sq = feat_sq_sum / np.maximum(feat_count, 1)
+    var = np.maximum(mean_sq - mean ** 2, 0)
+    std = np.sqrt(var)
+    std[std < 1e-6] = 1.0
+
+    stats = {
+        "mean": mean.astype(np.float32).tolist(),
+        "std": std.astype(np.float32).tolist(),
+        "feature_cols": feature_cols,
+        "fit_split": "train",
+        "fit_cohort": "pure_healthy_train_seniors_zero_l3_history",
+        "train_pure_healthy_seniors": list(map(str, train_pure_healthy_seniors)),
+        "source_path": str(X_train_path.resolve()),
+        "source_shape": list(X.shape),
+        "seq_len": int(X.shape[1]),
+        "n_features": int(X.shape[2]),
+        "nan_policy": "ignore_when_fitting_fill_with_train_mean_when_transforming",
+    }
+    with open(STATS_PATH, 'w') as f:
+        json.dump(stats, f, indent=2)
+    logger.info(f"  + Saved train-only normalization stats -> {STATS_PATH}")
 
 
 def assert_disjoint_splits(split_map: Dict[str, List]) -> None:
@@ -658,9 +755,11 @@ def save_metadata(
     y_val: np.ndarray,
     X_test: np.ndarray,
     y_test: np.ndarray,
-    n_train_seniors: int,
-    n_val_seniors: int,
-    n_test_seniors: int,
+    train_seniors: List,
+    train_pure_healthy_seniors: List,
+    train_l3_excluded_seniors: List,
+    val_seniors: List,
+    test_seniors: List,
     feature_cols: List[str]
 ) -> None:
     n_val_anomalies = np.sum(y_val)
@@ -673,14 +772,19 @@ def save_metadata(
 Configuration:
   Sequence length: {SEQ_LEN}
   Step cap: {STEP_CAP}
-  Train seniors: {n_train_seniors:,}
-    Val seniors: {n_val_seniors:,}
-  Test seniors: {n_test_seniors:,}
+  Train split seniors: {len(train_seniors):,}
+  Pure healthy train seniors used for X_train: {len(train_pure_healthy_seniors):,}
+  Train seniors excluded due to any Level 3 history: {len(train_l3_excluded_seniors):,}
+  Val seniors: {len(val_seniors):,}
+  Test seniors: {len(test_seniors):,}
+  Random seed: {RANDOM_SEED}
+  Train max windows: {TRAIN_MAX_WINDOWS}
 
 Training Data:
   Shape: {X_train.shape}
   Samples: {len(X_train):,}
-  (All normal windows)
+  Cohort: senior_id with zero label_3 rows in entire history
+  Windows: all labels normal within lookback
 
 Testing Data:
   Shape: {X_test.shape}
@@ -693,6 +797,15 @@ Validation Data:
     Normal: {n_val_normal:,}
 
 Features: {len(feature_cols)}
+Feature Columns:
+{json.dumps(feature_cols)}
+
+Senior ID Distributions:
+  train_seniors: {json.dumps(list(map(str, train_seniors)))}
+  train_pure_healthy_seniors: {json.dumps(list(map(str, train_pure_healthy_seniors)))}
+  train_l3_excluded_seniors: {json.dumps(list(map(str, train_l3_excluded_seniors)))}
+  val_seniors: {json.dumps(list(map(str, val_seniors)))}
+  test_seniors: {json.dumps(list(map(str, test_seniors)))}
 """
     
     with open(METADATA_PATH, 'w') as f:
@@ -707,11 +820,29 @@ def main():
     logger.info("=" * 100)
 
     logger.info(f"Discovering Parquet metadata from {PARQUET_PATH}...")
-    columns, unique_seniors = discover_dataset_metadata(PARQUET_PATH)
-    logger.info(f"Columns: {len(columns)}; seniors: {len(unique_seniors):,}")
+    columns, unique_seniors, parquet_l3_seniors = discover_dataset_metadata(PARQUET_PATH)
+    db_l3_seniors = discover_l3_alert_seniors_from_db(PROCESSED_DB_PATH)
+    l3_seniors = parquet_l3_seniors | db_l3_seniors
+    logger.info(
+        f"Columns: {len(columns)}; seniors: {len(unique_seniors):,}; "
+        f"seniors with Level 3 history: {len(l3_seniors):,} "
+        f"(parquet labels={len(parquet_l3_seniors):,}, db alerts={len(db_l3_seniors):,})"
+    )
 
     train_seniors, val_seniors, test_seniors = split_senior_ids(unique_seniors)
-    write_split_manifest(train_seniors, val_seniors, test_seniors)
+    train_pure_healthy_seniors = [sid for sid in train_seniors if sid not in l3_seniors]
+    train_l3_excluded_seniors = [sid for sid in train_seniors if sid in l3_seniors]
+    logger.info(
+        f"Pure healthy train seniors: {len(train_pure_healthy_seniors):,}; "
+        f"excluded train seniors with Level 3 history: {len(train_l3_excluded_seniors):,}"
+    )
+    write_split_manifest(
+        train_seniors,
+        train_pure_healthy_seniors,
+        train_l3_excluded_seniors,
+        val_seniors,
+        test_seniors,
+    )
 
     feature_cols = get_feature_columns(pd.DataFrame(columns=columns))
     read_columns = list(dict.fromkeys(['senior_id', 'timestamp', 'label_1', 'label_2', 'label_3'] + feature_cols))
@@ -719,7 +850,7 @@ def main():
     logger.info(f"TRAIN_MAX_WINDOWS: {TRAIN_MAX_WINDOWS:,} (set env TRAIN_MAX_WINDOWS=0 for all windows)")
 
     X_train = generate_training_data_streaming(
-        PARQUET_PATH, train_seniors, SEQ_LEN, feature_cols, read_columns
+        PARQUET_PATH, train_pure_healthy_seniors, SEQ_LEN, feature_cols, read_columns
     )
     X_val, y_val = generate_testing_data_streaming(
         PARQUET_PATH, val_seniors, SEQ_LEN, feature_cols, read_columns, split_label="VALIDATION"
@@ -741,15 +872,18 @@ def main():
         return
     
     save_sequences(X_train, X_val, y_val, X_test, y_test)
+    write_normalization_stats(X_TRAIN_PATH, feature_cols, train_pure_healthy_seniors)
     save_metadata(
         X_train,
         X_val,
         y_val,
         X_test,
         y_test,
-        len(train_seniors),
-        len(val_seniors),
-        len(test_seniors),
+        train_seniors,
+        train_pure_healthy_seniors,
+        train_l3_excluded_seniors,
+        val_seniors,
+        test_seniors,
         feature_cols
     )
     
