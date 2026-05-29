@@ -37,6 +37,10 @@ STEP_CAP = 2000
 RANDOM_SEED = 42
 TRAIN_STRIDE = 11
 TRAIN_MAX_WINDOWS = int(os.getenv("TRAIN_MAX_WINDOWS", "500000"))
+VAL_L3_SENIORS = int(os.getenv("VAL_L3_SENIORS", "50"))
+TEST_L3_SENIORS = int(os.getenv("TEST_L3_SENIORS", "50"))
+HEALTHY_VAL_RATIO = float(os.getenv("HEALTHY_VAL_RATIO", "0.05"))
+HEALTHY_TEST_RATIO = float(os.getenv("HEALTHY_TEST_RATIO", "0.05"))
 
 X_TRAIN_PATH = OUTPUT_DIR / 'X_train.npy'
 X_VAL_PATH = OUTPUT_DIR / 'X_val.npy'
@@ -117,20 +121,52 @@ def discover_l3_alert_seniors_from_db(db_path: Path) -> set:
     return {row[0] for row in rows}
 
 
-def split_senior_ids(unique_seniors: List) -> Tuple[List, List, List]:
-    """Split already-discovered senior ids 70/15/15."""
-    n_seniors = len(unique_seniors)
-    random.seed(RANDOM_SEED)
-    shuffled = list(unique_seniors)
-    random.shuffle(shuffled)
+def split_senior_ids(unique_seniors: List, l3_seniors: set) -> Tuple[List, List, List]:
+    """
+    Stratified senior split.
 
-    train_idx = int(n_seniors * 0.70)
-    val_idx = int(n_seniors * 0.85)
+    Reserve fixed Level 3 senior counts for validation/test, leave remaining
+    Level 3 seniors in train where the pure-train filter excludes them from
+    X_train, then distribute healthy seniors at the requested ratios.
+    """
+    rng = random.Random(RANDOM_SEED)
+    unique_set = set(unique_seniors)
+    l3_pool = sorted(unique_set & set(l3_seniors))
+    healthy_pool = sorted(unique_set - set(l3_pool))
+    rng.shuffle(l3_pool)
+    rng.shuffle(healthy_pool)
 
-    train_seniors = shuffled[:train_idx]
-    val_seniors = shuffled[train_idx:val_idx]
-    test_seniors = shuffled[val_idx:]
+    if len(l3_pool) < (VAL_L3_SENIORS + TEST_L3_SENIORS):
+        raise ValueError(
+            f"Need at least {VAL_L3_SENIORS + TEST_L3_SENIORS} Level 3 seniors "
+            f"for val/test reservation, found {len(l3_pool)}."
+        )
 
+    val_l3 = l3_pool[:VAL_L3_SENIORS]
+    test_l3 = l3_pool[VAL_L3_SENIORS:VAL_L3_SENIORS + TEST_L3_SENIORS]
+    train_l3 = l3_pool[VAL_L3_SENIORS + TEST_L3_SENIORS:]
+
+    n_healthy = len(healthy_pool)
+    n_val_healthy = int(round(n_healthy * HEALTHY_VAL_RATIO))
+    n_test_healthy = int(round(n_healthy * HEALTHY_TEST_RATIO))
+
+    val_healthy = healthy_pool[:n_val_healthy]
+    test_healthy = healthy_pool[n_val_healthy:n_val_healthy + n_test_healthy]
+    train_healthy = healthy_pool[n_val_healthy + n_test_healthy:]
+
+    train_seniors = train_l3 + train_healthy
+    val_seniors = val_l3 + val_healthy
+    test_seniors = test_l3 + test_healthy
+    rng.shuffle(train_seniors)
+    rng.shuffle(val_seniors)
+    rng.shuffle(test_seniors)
+
+    logger.info(
+        f"Level 3 seniors: train={len(train_l3)}, val={len(val_l3)}, test={len(test_l3)}"
+    )
+    logger.info(
+        f"Healthy seniors: train={len(train_healthy)}, val={len(val_healthy)}, test={len(test_healthy)}"
+    )
     logger.info(f"Train: {len(train_seniors)}, Val: {len(val_seniors)}, Test: {len(test_seniors)}")
     assert_disjoint_splits({
         'train': train_seniors,
@@ -158,6 +194,13 @@ def write_split_manifest(
     manifest = {
         'random_seed': RANDOM_SEED,
         'split_unit': 'senior_id',
+        'stratification': {
+            'minority_class': 'Level 3 / label_3 senior history',
+            'val_l3_seniors': VAL_L3_SENIORS,
+            'test_l3_seniors': TEST_L3_SENIORS,
+            'healthy_val_ratio': HEALTHY_VAL_RATIO,
+            'healthy_test_ratio': HEALTHY_TEST_RATIO,
+        },
         'train_seniors': list(map(str, train_seniors)),
         'train_pure_healthy_seniors': list(map(str, train_pure_healthy_seniors)),
         'train_l3_excluded_seniors': list(map(str, train_l3_excluded_seniors)),
@@ -779,6 +822,8 @@ Configuration:
   Test seniors: {len(test_seniors):,}
   Random seed: {RANDOM_SEED}
   Train max windows: {TRAIN_MAX_WINDOWS}
+  Stratified Level 3 senior reservation: val={VAL_L3_SENIORS}, test={TEST_L3_SENIORS}
+  Healthy senior split ratios: train={1.0 - HEALTHY_VAL_RATIO - HEALTHY_TEST_RATIO:.3f}, val={HEALTHY_VAL_RATIO:.3f}, test={HEALTHY_TEST_RATIO:.3f}
 
 Training Data:
   Shape: {X_train.shape}
@@ -829,7 +874,7 @@ def main():
         f"(parquet labels={len(parquet_l3_seniors):,}, db alerts={len(db_l3_seniors):,})"
     )
 
-    train_seniors, val_seniors, test_seniors = split_senior_ids(unique_seniors)
+    train_seniors, val_seniors, test_seniors = split_senior_ids(unique_seniors, l3_seniors)
     train_pure_healthy_seniors = [sid for sid in train_seniors if sid not in l3_seniors]
     train_l3_excluded_seniors = [sid for sid in train_seniors if sid in l3_seniors]
     logger.info(
