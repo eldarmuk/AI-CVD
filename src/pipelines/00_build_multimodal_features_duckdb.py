@@ -74,11 +74,13 @@ def build_feature_sql(senior_min: int | None = None, senior_max: int | None = No
                 CAST(avg(CASE WHEN type = 'Heartrate' THEN value END) AS FLOAT) AS heartrate,
                 CAST(avg(CASE WHEN type = 'BloodPressure' THEN sbp END) AS FLOAT) AS sbp,
                 CAST(avg(CASE WHEN type = 'BloodPressure' THEN dbp END) AS FLOAT) AS dbp,
-                CAST(
-                    avg(CASE WHEN type = 'BloodPressure' THEN sbp END)
-                    - avg(CASE WHEN type = 'BloodPressure' THEN dbp END)
-                    AS FLOAT
-                ) AS pulse_pressure,
+                CAST(CASE
+                    WHEN avg(CASE WHEN type = 'BloodPressure' THEN dbp END)
+                       >= avg(CASE WHEN type = 'BloodPressure' THEN sbp END)
+                    THEN NULL
+                    ELSE avg(CASE WHEN type = 'BloodPressure' THEN sbp END)
+                       - avg(CASE WHEN type = 'BloodPressure' THEN dbp END)
+                END AS FLOAT) AS pulse_pressure,
                 CAST(sum(CASE WHEN type = 'Steps' THEN value ELSE 0 END) AS FLOAT) AS steps,
                 CAST(avg(CASE WHEN type = 'Saturation' THEN value END) AS FLOAT) AS saturation,
                 max(CASE WHEN type = 'Temperature' THEN meas_ts END) AS latest_temperature_ts,
