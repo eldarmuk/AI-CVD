@@ -1,0 +1,17 @@
+{
+  "model": "CCA-TAVAE",
+  "mode": "vae",
+  "auroc": 0.4626780626780627,
+  "auprc": 0.5054857519595067,
+  "auroc_ci_low": 0.3403289846851957,
+  "auroc_ci_high": 0.5896990740740742,
+  "threshold": 0.048582881689071655,
+  "threshold_source": "validation G-Mean from models/lstm_vae/validation_metrics.json",
+  "n_windows": 84,
+  "positives": 45,
+  "negatives": 39,
+  "prevalence": 0.5357142857142857,
+  "active_window_mask_applied": true,
+  "prediction_window": "4 hours",
+  "cohort": "elite"
+}

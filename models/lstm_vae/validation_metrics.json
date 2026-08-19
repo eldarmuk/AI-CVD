@@ -1,0 +1,10 @@
+{
+  "best_val_loss": 0.1834874004125595,
+  "best_threshold": {
+    "threshold": 0.048582881689071655,
+    "gmean": 0.550413288521314,
+    "tpr": 0.6981132075471698,
+    "fpr": 0.5660377358490566
+  },
+  "note": "Threshold selected on VALIDATION set, will be applied to TEST set"
+}
