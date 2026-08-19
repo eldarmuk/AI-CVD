@@ -308,6 +308,36 @@ def write_xgb_importance(model: Pipeline, feature_names: list[str], report_dir: 
     importance.to_csv(report_dir / "xgboost_feature_importance.csv", index=False)
 
 
+def skipped_supervised_row(model_name: str, y_train: np.ndarray) -> dict[str, Any]:
+    classes, counts = np.unique(y_train, return_counts=True)
+    return {
+        "model": model_name,
+        "model_family": "Supervised Classifier",
+        "status": "skipped",
+        "skip_reason": (
+            "Supervised classifier requires at least two classes in y_train; "
+            "the curated anomaly-detection training split is pure healthy."
+        ),
+        "train_classes": json.dumps({str(cls): int(count) for cls, count in zip(classes, counts)}),
+        "val_balanced_auroc": np.nan,
+        "val_balanced_auprc": np.nan,
+        "val_gmean_threshold": np.nan,
+        "val_gmean": np.nan,
+        "test_auroc": np.nan,
+        "test_auroc_ci_low": np.nan,
+        "test_auroc_ci_high": np.nan,
+        "test_auprc": np.nan,
+        "test_optimal_f1": np.nan,
+        "test_optimal_f1_threshold": np.nan,
+        "test_precision_at_80_recall": np.nan,
+        "test_confusion_tn": np.nan,
+        "test_confusion_fp": np.nan,
+        "test_confusion_fn": np.nan,
+        "test_confusion_tp": np.nan,
+        "test_threshold_source": np.nan,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run classical baseline benchmark suite.")
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
@@ -334,26 +364,36 @@ def main() -> None:
 
     metrics_rows: list[dict[str, Any]] = []
 
-    for name, model in supervised_models().items():
-        logger.info("Training %s", name)
-        fit_kwargs: dict[str, Any] = {}
-        if name == "xgboost":
-            fit_kwargs["model__sample_weight"] = compute_sample_weight("balanced", y_train)
-        model.fit(X_train, y_train, **fit_kwargs)
-        val_scores = score_model(model, X_val)
-        test_scores = score_model(model, X_test)
-        row = evaluate_scores(name, y_val[val_bal_idx], val_scores[val_bal_idx], y_test, test_scores)
-        metrics_rows.append(row)
-        np.savez_compressed(
-            args.report_dir / f"predictions_{name}.npz",
-            y_val_balanced=y_val[val_bal_idx],
-            val_balanced_scores=val_scores[val_bal_idx],
-            y_test=y_test,
-            test_scores=test_scores,
+    train_classes = np.unique(y_train)
+    if len(train_classes) < 2:
+        logger.warning(
+            "Skipping supervised baselines because y_train has one class only: %s. "
+            "Proceeding with healthy-only anomaly detectors.",
+            train_classes.tolist(),
         )
-        save_pickle(args.model_dir / f"{name}.pkl", model)
-        if name == "xgboost":
-            write_xgb_importance(model, feature_names, args.report_dir)
+        metrics_rows.extend(skipped_supervised_row(name, y_train) for name in supervised_models())
+    else:
+        for name, model in supervised_models().items():
+            logger.info("Training %s", name)
+            fit_kwargs: dict[str, Any] = {}
+            if name == "xgboost":
+                fit_kwargs["model__sample_weight"] = compute_sample_weight("balanced", y_train)
+            model.fit(X_train, y_train, **fit_kwargs)
+            val_scores = score_model(model, X_val)
+            test_scores = score_model(model, X_test)
+            row = evaluate_scores(name, y_val[val_bal_idx], val_scores[val_bal_idx], y_test, test_scores)
+            row["status"] = "fit"
+            metrics_rows.append(row)
+            np.savez_compressed(
+                args.report_dir / f"predictions_{name}.npz",
+                y_val_balanced=y_val[val_bal_idx],
+                val_balanced_scores=val_scores[val_bal_idx],
+                y_test=y_test,
+                test_scores=test_scores,
+            )
+            save_pickle(args.model_dir / f"{name}.pkl", model)
+            if name == "xgboost":
+                write_xgb_importance(model, feature_names, args.report_dir)
 
     healthy_train = sample_rows(X_train, train_pure_mask, MAX_IFOREST_TRAIN, RANDOM_SEED)
     for name, model in anomaly_models().items():
@@ -368,6 +408,8 @@ def main() -> None:
         val_scores = score_model(model, X_val, anomaly=True)
         test_scores = score_model(model, X_test, anomaly=True)
         row = evaluate_scores(name, y_val[val_bal_idx], val_scores[val_bal_idx], y_test, test_scores)
+        row["model_family"] = "Classical Anomaly Detector"
+        row["status"] = "fit"
         row["train_windows"] = int(len(train_subset))
         metrics_rows.append(row)
         np.savez_compressed(
