@@ -103,11 +103,10 @@ def prepare_arrays(
     normalized = np.nan_to_num(normalized, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
     static_indices = [idx for idx, name in enumerate(feature_names) if name in STATIC_FEATURES]
-    dynamic_indices = [idx for idx, name in enumerate(feature_names) if name not in STATIC_FEATURES]
-    if not static_indices or not dynamic_indices:
-        raise ValueError("Both dynamic and static features are required.")
+    if not static_indices:
+        raise ValueError("Static features are required for the clinical attention branch.")
 
-    return normalized[:, :, dynamic_indices], normalized[:, 0, static_indices], y.astype(np.float32)
+    return normalized, normalized[:, 0, static_indices], y.astype(np.float32)
 
 
 def predict(model: nn.Module, loader: DataLoader, device: torch.device) -> tuple[np.ndarray, np.ndarray]:
@@ -128,6 +127,30 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> dict
         "auroc": float(roc_auc_score(y_true, scores)),
         "auprc": float(average_precision_score(y_true, scores)),
     }
+
+
+def train_one_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    criterion: nn.Module,
+    device: torch.device,
+    grad_clip: float,
+) -> float:
+    model.train()
+    losses: list[float] = []
+    for X_dynamic, X_static, y in loader:
+        optimizer.zero_grad()
+        probs = model(X_dynamic.to(device), X_static.to(device))
+        loss = criterion(probs, y.to(device))
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(
+            [parameter for parameter in model.parameters() if parameter.requires_grad],
+            grad_clip,
+        )
+        optimizer.step()
+        losses.append(float(loss.item()))
+    return float(np.mean(losses))
 
 
 def load_supervised_train(path: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -195,53 +218,35 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         embedding_dim=args.embedding_dim,
         dropout=args.dropout,
     ).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     criterion = nn.BCELoss()
+    best_path = args.model_dir / "best_transfer_model.pt"
+    skipped_transfer_keys: list[str] = []
+    if args.vae_checkpoint.exists():
+        skipped_transfer_keys = model.load_vae_encoder_weights(args.vae_checkpoint, map_location=device)
+        logger.info("Loaded VAE encoder weights from %s; skipped keys=%s", args.vae_checkpoint, skipped_transfer_keys)
+    else:
+        logger.warning("VAE checkpoint not found at %s; training transfer model from random init.", args.vae_checkpoint)
 
     best_val_auprc = -np.inf
     best_epoch = -1
+    best_phase = "none"
     patience = 0
     history: list[dict[str, Any]] = []
-    best_path = args.model_dir / "best_model.pt"
 
     logger.info(
-        "Training SupervisedSequenceNet on %s windows; val=%s, test=%s, device=%s",
+        "Training transfer SupervisedSequenceNet on %s windows; val=%s, test=%s, device=%s",
         len(y_train),
         len(y_val),
         len(y_test),
         device,
     )
-    for epoch in range(1, args.epochs + 1):
-        model.train()
-        losses: list[float] = []
-        for X_dynamic, X_static, y in train_loader:
-            optimizer.zero_grad()
-            probs = model(X_dynamic.to(device), X_static.to(device))
-            loss = criterion(probs, y.to(device))
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-            optimizer.step()
-            losses.append(float(loss.item()))
 
-        val_metrics = evaluate(model, val_loader, device)
-        row = {
-            "epoch": epoch,
-            "train_loss": float(np.mean(losses)),
-            "val_auroc": val_metrics["auroc"],
-            "val_auprc": val_metrics["auprc"],
-        }
-        history.append(row)
-        logger.info(
-            "Epoch %03d | loss=%.4f | val_auroc=%.4f | val_auprc=%.4f",
-            epoch,
-            row["train_loss"],
-            row["val_auroc"],
-            row["val_auprc"],
-        )
-
+    def maybe_save(row: dict[str, Any]) -> None:
+        nonlocal best_val_auprc, best_epoch, best_phase, patience
         if row["val_auprc"] > best_val_auprc:
             best_val_auprc = row["val_auprc"]
-            best_epoch = epoch
+            best_epoch = int(row["epoch"])
+            best_phase = str(row["phase"])
             patience = 0
             torch.save(
                 {
@@ -254,15 +259,69 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                     "embedding_dim": args.embedding_dim,
                     "dropout": args.dropout,
                     "best_epoch": best_epoch,
+                    "best_phase": best_phase,
                     "best_val_auprc": best_val_auprc,
+                    "vae_checkpoint": str(args.vae_checkpoint),
+                    "skipped_transfer_keys": skipped_transfer_keys,
                 },
                 best_path,
             )
         else:
             patience += 1
-            if patience >= args.patience:
-                logger.info("Early stopping at epoch %s.", epoch)
-                break
+
+    model.freeze_encoder()
+    phase1_optimizer = torch.optim.AdamW(
+        [parameter for parameter in model.parameters() if parameter.requires_grad],
+        lr=args.phase1_lr,
+        weight_decay=args.weight_decay,
+    )
+    logger.info("Phase 1: encoder frozen; training classifier/attention heads for %s epochs.", args.phase1_epochs)
+    for epoch in range(1, args.phase1_epochs + 1):
+        train_loss = train_one_epoch(model, train_loader, phase1_optimizer, criterion, device, args.grad_clip)
+        val_metrics = evaluate(model, val_loader, device)
+        row = {
+            "phase": "frozen_encoder",
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "val_auroc": val_metrics["auroc"],
+            "val_auprc": val_metrics["auprc"],
+        }
+        history.append(row)
+        logger.info(
+            "Phase 1 epoch %03d | loss=%.4f | val_auroc=%.4f | val_auprc=%.4f",
+            epoch,
+            train_loss,
+            row["val_auroc"],
+            row["val_auprc"],
+        )
+        maybe_save(row)
+
+    model.unfreeze_all()
+    phase2_optimizer = torch.optim.AdamW(model.parameters(), lr=args.phase2_lr, weight_decay=args.weight_decay)
+    patience = 0
+    logger.info("Phase 2: full network unfrozen; fine-tuning with lr=%s.", args.phase2_lr)
+    for epoch in range(1, args.epochs + 1):
+        train_loss = train_one_epoch(model, train_loader, phase2_optimizer, criterion, device, args.grad_clip)
+        val_metrics = evaluate(model, val_loader, device)
+        row = {
+            "phase": "full_finetune",
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "val_auroc": val_metrics["auroc"],
+            "val_auprc": val_metrics["auprc"],
+        }
+        history.append(row)
+        logger.info(
+            "Phase 2 epoch %03d | loss=%.4f | val_auroc=%.4f | val_auprc=%.4f",
+            epoch,
+            train_loss,
+            row["val_auroc"],
+            row["val_auprc"],
+        )
+        maybe_save(row)
+        if patience >= args.patience:
+            logger.info("Early stopping phase 2 at epoch %s.", epoch)
+            break
 
     checkpoint = torch.load(best_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -272,10 +331,11 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     np.savez_compressed(args.report_dir / "predictions_supervised_sequence_net.npz", y_test=y_test_true, test_scores=test_scores)
 
     output = {
-        "model": "Supervised Sequence Net",
-        "model_family": "Supervised Deep Sequence",
+        "model": "Supervised Sequence Net Transfer",
+        "model_family": "Transfer Deep Sequence",
         "status": "fit",
         "best_epoch": int(best_epoch),
+        "best_phase": best_phase,
         "best_val_auprc": float(best_val_auprc),
         "val_auroc": val_metrics["auroc"],
         "val_auprc": val_metrics["auprc"],
@@ -289,6 +349,10 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "active_window_mask_applied": True,
         "prediction_window": "4 hours",
         "cohort": "elite",
+        "target": "strict_level_3",
+        "vae_checkpoint": str(args.vae_checkpoint),
+        "transfer_loaded": bool(args.vae_checkpoint.exists()),
+        "skipped_transfer_keys": skipped_transfer_keys,
     }
     with open(args.model_dir / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2)
@@ -302,16 +366,19 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the supervised sequence crisis classifier.")
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
-    parser.add_argument("--supervised-train-archive", type=Path, default=DATA_DIR / "few_shot_train_intervention_balanced.npz")
+    parser.add_argument("--supervised-train-archive", type=Path, default=DATA_DIR / "few_shot_train_level3_balanced.npz")
+    parser.add_argument("--vae-checkpoint", type=Path, default=PROJECT_ROOT / "models" / "lstm_vae" / "best_checkpoint.pt")
     parser.add_argument("--model-dir", type=Path, default=MODEL_DIR)
     parser.add_argument("--report-dir", type=Path, default=REPORT_DIR)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--patience", type=int, default=30)
+    parser.add_argument("--phase1-epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--hidden-dim", type=int, default=64)
     parser.add_argument("--embedding-dim", type=int, default=32)
     parser.add_argument("--dropout", type=float, default=0.25)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--phase1-lr", type=float, default=1e-3)
+    parser.add_argument("--phase2-lr", type=float, default=5e-5)
     parser.add_argument("--weight-decay", type=float, default=1e-3)
     parser.add_argument("--grad-clip", type=float, default=5.0)
     parser.add_argument("--seed", type=int, default=42)

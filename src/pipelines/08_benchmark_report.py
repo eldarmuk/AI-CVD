@@ -104,8 +104,8 @@ def load_supervised_sequence_metrics(supervised_seq_dir: Path) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
-                "model": "Supervised Sequence Net",
-                "model_family": "Supervised Deep Sequence",
+                "model": metrics.get("model", "Supervised Sequence Net"),
+                "model_family": metrics.get("model_family", "Supervised Deep Sequence"),
                 "status": metrics.get("status", "fit"),
                 "val_balanced_auroc": metrics.get("val_auroc", np.nan),
                 "val_balanced_auprc": metrics.get("val_auprc", np.nan),
@@ -192,7 +192,11 @@ def write_comparison_plot(args: argparse.Namespace) -> None:
 
     supervised_seq_path = args.supervised_seq_report_dir / "predictions_supervised_sequence_net.npz"
     if supervised_seq_path.exists():
-        plot_classical_prediction_file(ax_roc, ax_pr, supervised_seq_path, "Supervised Sequence Net")
+        metrics_path = args.supervised_seq_dir / "metrics.json"
+        supervised_label = "Supervised Sequence Net"
+        if metrics_path.exists():
+            supervised_label = read_json(metrics_path).get("model", supervised_label)
+        plot_classical_prediction_file(ax_roc, ax_pr, supervised_seq_path, supervised_label)
 
     ax_roc.plot([0, 1], [0, 1], color="black", linestyle=":", lw=1)
     ax_roc.set_title("ROC Comparison")

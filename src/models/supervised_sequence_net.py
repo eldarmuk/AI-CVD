@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 
@@ -85,6 +87,28 @@ class SupervisedSequenceNet(nn.Module):
             nn.Linear(hidden_dim // 2, 1),
             nn.Sigmoid(),
         )
+
+    def freeze_encoder(self) -> None:
+        for parameter in self.encoder_lstm.parameters():
+            parameter.requires_grad = False
+
+    def unfreeze_all(self) -> None:
+        for parameter in self.parameters():
+            parameter.requires_grad = True
+
+    def load_vae_encoder_weights(self, checkpoint_path: Path, map_location: str | torch.device = "cpu") -> list[str]:
+        checkpoint = torch.load(checkpoint_path, map_location=map_location, weights_only=False)
+        state_dict = checkpoint.get("model_state_dict", checkpoint)
+        encoder_state = {
+            key.replace("encoder_lstm.", ""): value
+            for key, value in state_dict.items()
+            if key.startswith("encoder_lstm.")
+        }
+        if not encoder_state:
+            raise ValueError(f"No encoder_lstm weights found in {checkpoint_path}")
+        incompatible = self.encoder_lstm.load_state_dict(encoder_state, strict=False)
+        skipped = list(incompatible.missing_keys) + list(incompatible.unexpected_keys)
+        return skipped
 
     def forward(self, X_dynamic: torch.Tensor, X_static: torch.Tensor) -> torch.Tensor:
         sequence_states, (hidden, _) = self.encoder_lstm(X_dynamic)
