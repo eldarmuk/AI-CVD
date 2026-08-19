@@ -22,7 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data" / "processed" / "anomaly_detection"
 FEATURE_NAMES_PATH = PROJECT_ROOT / "data" / "processed" / "feature_names.txt"
 STATS_PATH = DATA_DIR / "normalization_stats.json"
-SUPERVISED_TRAIN_ARCHIVE = DATA_DIR / "few_shot_train_level3_balanced.npz"
+SUPERVISED_TRAIN_ARCHIVE = DATA_DIR / "few_shot_train_intervention_balanced.npz"
 
 STATIC_FEATURES = {
     "age",
@@ -46,6 +46,17 @@ SUMMARY_STATS = {
     "max": np.nanmax,
     "min": np.nanmin,
 }
+
+ACTIVE_WINDOW_CORE_COLUMNS = (
+    "heartrate_max",
+    "heartrate_mean",
+    "sbp_max",
+    "sbp_mean",
+    "dbp_max",
+    "dbp_mean",
+    "saturation_max",
+    "saturation_mean",
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -139,6 +150,50 @@ def flatten_sequences(X: np.ndarray, feature_names: list[str]) -> pd.DataFrame:
     return pd.DataFrame(X_flat, columns=columns)
 
 
+def active_window_mask(X_flat: pd.DataFrame) -> np.ndarray:
+    core_cols = [col for col in ACTIVE_WINDOW_CORE_COLUMNS if col in X_flat.columns]
+    if not core_cols:
+        raise ValueError(
+            "Cannot apply local density filtering because none of the configured "
+            f"core vital columns are present: {ACTIVE_WINDOW_CORE_COLUMNS}"
+        )
+
+    core = X_flat[core_cols].replace([np.inf, -np.inf], np.nan)
+    valid_nonzero = core.notna() & (core.abs() > 1e-6)
+    return valid_nonzero.any(axis=1).to_numpy()
+
+
+def apply_active_window_filter(
+    split_label: str,
+    X_flat: pd.DataFrame,
+    y: np.ndarray,
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+    mask = active_window_mask(X_flat)
+    before = len(X_flat)
+    after = int(mask.sum())
+    survival = after / before if before else 0.0
+    logger.info(
+        "%s windows reduced from %s to %s (%.2f%% retained) due to local density filtering.",
+        split_label,
+        before,
+        after,
+        survival * 100.0,
+    )
+    if after == 0:
+        raise ValueError(f"Local density filtering removed every row from {split_label}.")
+
+    filtered_X = X_flat.loc[mask].reset_index(drop=True)
+    filtered_y = y[mask]
+    classes = np.unique(filtered_y)
+    if split_label in {"val", "test", "train_supervised"} and len(classes) < 2:
+        logger.warning(
+            "%s has a single class after local density filtering: %s",
+            split_label,
+            classes.tolist(),
+        )
+    return filtered_X, filtered_y, mask
+
+
 def process_split(data_dir: Path, split: str, feature_names: list[str]) -> dict:
     x_path = data_dir / f"X_{split}.npy"
     if not x_path.exists():
@@ -150,14 +205,17 @@ def process_split(data_dir: Path, split: str, feature_names: list[str]) -> dict:
 
     X_flat = flatten_sequences(X, feature_names)
     y = load_targets(data_dir, split, X.shape[0])
+    X_flat, y, active_mask = apply_active_window_filter(split, X_flat, y)
 
     x_out = data_dir / f"X_{split}_flat.parquet"
     y_out = data_dir / f"y_{split}_l3.npy"
     mask_out = data_dir / f"{split}_pure_healthy_mask.npy"
+    active_mask_out = data_dir / f"{split}_active_window_mask.npy"
 
     X_flat.to_parquet(x_out, index=False)
     np.save(y_out, y)
     np.save(mask_out, y == 0)
+    np.save(active_mask_out, active_mask)
 
     logger.info(
         "Saved %s: X_flat=%s, y=%s, positives=%s",
@@ -171,10 +229,13 @@ def process_split(data_dir: Path, split: str, feature_names: list[str]) -> dict:
         "X_flat_path": str(x_out),
         "y_path": str(y_out),
         "pure_healthy_mask_path": str(mask_out),
+        "active_window_mask_path": str(active_mask_out),
         "X_shape": list(X.shape),
         "X_flat_shape": list(X_flat.shape),
         "y_shape": list(y.shape),
         "positives": int(y.sum()),
+        "active_windows": int(active_mask.sum()),
+        "active_window_survival_rate": float(active_mask.mean()),
         "columns": list(X_flat.columns),
     }
 
@@ -192,11 +253,14 @@ def process_supervised_train(data_dir: Path, archive_path: Path, feature_names: 
     logger.info("supervised train shape: %s; positives=%s", X.shape, int(y.sum()))
 
     X_flat = flatten_sequences(X, feature_names)
+    X_flat, y, active_mask = apply_active_window_filter("train_supervised", X_flat, y)
     x_out = data_dir / "X_train_supervised_flat.parquet"
     y_out = data_dir / "y_train_supervised.npy"
+    active_mask_out = data_dir / "train_supervised_active_window_mask.npy"
 
     X_flat.to_parquet(x_out, index=False)
     np.save(y_out, y)
+    np.save(active_mask_out, active_mask)
 
     logger.info(
         "Saved supervised train: X_flat=%s, y=%s, positives=%s",
@@ -208,10 +272,13 @@ def process_supervised_train(data_dir: Path, archive_path: Path, feature_names: 
         "X_source": str(archive_path),
         "X_flat_path": str(x_out),
         "y_path": str(y_out),
+        "active_window_mask_path": str(active_mask_out),
         "X_shape": list(X.shape),
         "X_flat_shape": list(X_flat.shape),
         "y_shape": list(y.shape),
         "positives": int(y.sum()),
+        "active_windows": int(active_mask.sum()),
+        "active_window_survival_rate": float(active_mask.mean()),
         "columns": list(X_flat.columns),
     }
 
@@ -227,6 +294,11 @@ def write_metadata(data_dir: Path, feature_names: list[str], split_metadata: dic
             "dynamic_temporal_stats": list(SUMMARY_STATS.keys()),
             "static_policy": "first time step value, X[:, 0, feature_index]",
             "sample_iteration": False,
+        },
+        "local_density_filter": {
+            "enabled": True,
+            "active_window_definition": "At least one configured core vital summary is finite and non-zero.",
+            "core_columns": list(ACTIVE_WINDOW_CORE_COLUMNS),
         },
         "feature_names": feature_names,
         "splits": split_metadata,

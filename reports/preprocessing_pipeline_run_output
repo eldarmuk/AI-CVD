@@ -1,0 +1,103 @@
+================================================================================
+HRP DATA PROCESSING PIPELINE
+================================================================================
+Chunk size: 5,000,000 rows
+Burst window: 10 minutes
+Current year: 2026
+
+✓ Starting fresh processing
+   Output: C:\Users\eldar\Projects\AI-CVD\data\processed\hrp_processed.db
+
+Connecting to raw database: C:\Users\eldar\Projects\AI-CVD\db\hrp_data.db
+Creating processed database: C:\Users\eldar\Projects\AI-CVD\data\processed\hrp_processed.db
+
+================================================================================
+PROCESSING SENIORS TABLE (RESUMABLE)
+================================================================================
+Initial seniors: 13,317
+After age filter (40-120): 12,823
+After dropping both NULL: 12,823
+Final seniors: 12,823
+  - With valid gender: 12,800
+  - With age: 12,823
+  - With birthdate: 12,823
+✓ Seniors table written
+
+================================================================================
+PROCESSING MEASUREMENTS TABLE (CHUNKED & RESUMABLE)
+================================================================================
+Total measurements: 72,654,799
+Valid seniors in processed DB: 12,823
+
+✓ Starting fresh processing
+Processing measurements: 100%|█████████████████████████████| 72654799/72654799 [1:13:41<00:00, 16432.46rows/s]
+
+✓ Measurements processing complete
+  - Total processed: 72,654,799
+  - Total written: 70,428,508
+  - Dropped (not in seniors): 2,225,546
+  - Duplicates removed (after filtering): 745
+
+Creating indexes...
+✓ Indexes created
+
+================================================================================
+PROCESSING ALERTS TABLE (RESUMABLE)
+================================================================================
+Initial alerts: 5,420
+After filtering unknown seniors: 5,141 (dropped 279)
+After burst merging: 4,721 events
+  - Compression ratio: 91.8%
+  - Single-alert events: 4,440
+  - Multi-alert events: 281
+
+Severity distribution:
+  - Level 0 (Noise/Tech): 4,251
+  - Level 1 (Low): 153
+  - Level 2 (Potential): 256
+  - Level 3 (Acute): 61
+✓ Alerts table written
+
+================================================================================
+CREATING MEDICAL RISK PROFILES (RESUMABLE)
+================================================================================
+Total disease records: 49,444
+Unique diseases: 161
+After filtering unknown seniors: 48,471 (dropped 973)
+Seniors with disease data: 8,038
+
+Domain distribution:
+  - cardiovascular: 6,662 seniors (82.9%)
+  - metabolic_endocrine: 4,592 seniors (57.1%)
+  - neurological: 1,491 seniors (18.5%)
+  - psychiatric_cognitive: 1,889 seniors (23.5%)
+  - musculoskeletal: 4,395 seniors (54.7%)
+  - respiratory: 1,046 seniors (13.0%)
+  - gastro_renal_urologic: 1,328 seniors (16.5%)
+  - oncological: 90 seniors (1.1%)
+  - sensory: 3,076 seniors (38.3%)
+  - other_functional_risk: 427 seniors (5.3%)
+  - other: 4,119 seniors (51.2%)
+
+✓ Risk profiles table written
+
+================================================================================
+COPYING AUXILIARY TABLES
+================================================================================
+✓ Copied diseases: 161 rows
+✓ Copied medicines: 1,713 rows
+✓ Filtered senior_diseases: kept 48,471, dropped 973 (unknown seniors)
+✓ Filtered senior_medicines: kept 47,355, dropped 949 (unknown seniors)
+
+================================================================================
+PROCESSING COMPLETE
+================================================================================
+  - seniors: 12,823 rows
+  - measurements: 70,428,508 rows
+  - alerts: 4,721 rows
+  - senior_risk_profiles: 8,038 rows
+
+Processed database size: 8472.9 MB
+Location: C:\Users\eldar\Projects\AI-CVD\data\processed\hrp_processed.db
+
+✓ Pipeline completed successfully!

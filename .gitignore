@@ -11,9 +11,6 @@ __pycache__/
 # Trash
 .trash/
 
-# Reports
-reports/
-
 # Data Files
 *.parquet
 *.npy
@@ -22,9 +19,10 @@ reports/
 *.db
 *.sqlite
 
-# Specific large directories
-data/processed/
+# Privacy-sensitive and large artifact directories
 data/raw/
+data/processed/
+db/
 models/
 
 # Logs

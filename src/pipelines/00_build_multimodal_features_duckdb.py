@@ -21,10 +21,11 @@ import duckdb
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB_PATH = PROJECT_ROOT / "db" / "hrp_processed.db"
 DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "data" / "processed" / "multimodal_features.parquet"
+DEFAULT_ELITE_COHORT_PATH = PROJECT_ROOT / "data" / "processed" / "gold_seniors" / "elite_cohort_ids.csv"
 
 BUCKET_SIZE = "5 minutes"
 BURST_WINDOW = "10 minutes"
-LOOKAHEAD_WINDOW = "24 hours"
+LOOKAHEAD_WINDOW = "4 hours"
 RECENT_ALERT_WINDOW = "48 hours"
 
 RISK_COLUMNS = [
@@ -51,6 +52,7 @@ def build_feature_sql(senior_min: int | None = None, senior_max: int | None = No
     senior_filter = ""
     if senior_min is not None and senior_max is not None:
         senior_filter = f"AND senior_id BETWEEN {int(senior_min)} AND {int(senior_max)}"
+    elite_filter = "AND CAST(senior_id AS INTEGER) IN (SELECT senior_id FROM elite_seniors)"
 
     return f"""
         WITH typed_measurements AS (
@@ -64,6 +66,7 @@ def build_feature_sql(senior_min: int | None = None, senior_max: int | None = No
                 CAST(pulse_pressure AS FLOAT) AS pulse_pressure
             FROM hrp.measurements
             WHERE date IS NOT NULL
+              {elite_filter}
               {senior_filter}
         ),
         measurement_buckets AS (
@@ -113,6 +116,7 @@ def build_feature_sql(senior_min: int | None = None, senior_max: int | None = No
                 ) AS prev_alert_ts
             FROM hrp.alerts
             WHERE alert_date IS NOT NULL
+              {elite_filter}
               {senior_filter}
         ),
         compressed_alerts AS (
@@ -342,10 +346,17 @@ def replace_output_atomically(output_path: Path, temp_output_path: Path) -> None
 def export_multimodal_features(
     db_path: Path,
     output_path: Path,
+    elite_cohort_path: Path,
     threads: int,
     memory_limit: str,
     senior_chunk_size: int,
 ) -> None:
+    if not elite_cohort_path.exists():
+        raise FileNotFoundError(
+            f"Elite cohort file not found: {elite_cohort_path}. "
+            "Run src/pipelines/00a_filter_elite_cohort.py first."
+        )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_output_path = output_path.with_name(f".{output_path.name}.tmp_parts")
     duckdb_temp_dir = output_path.parent / ".duckdb_tmp"
@@ -360,17 +371,28 @@ def export_multimodal_features(
     con.execute("INSTALL sqlite;")
     con.execute("LOAD sqlite;")
     con.execute(f"ATTACH '{db_path}' AS hrp (TYPE sqlite, READ_ONLY true);")
+    con.execute(
+        f"""
+        CREATE TEMP TABLE elite_seniors AS
+        SELECT DISTINCT CAST(senior_id AS INTEGER) AS senior_id
+        FROM read_csv_auto('{elite_cohort_path.as_posix()}');
+        """
+    )
+    elite_count = con.execute("SELECT count(*) FROM elite_seniors").fetchone()[0]
+    if elite_count == 0:
+        raise RuntimeError(f"Elite cohort file is empty: {elite_cohort_path}")
 
-    print(f"Exporting 5-minute multimodal features from {db_path}")
-    print(f"Output dataset directory: {output_path}")
-    print(f"Threads: {threads}; memory_limit: {memory_limit}; senior_chunk_size: {senior_chunk_size}")
+    print(f"Exporting 5-minute multimodal features from {db_path}", flush=True)
+    print(f"Output dataset directory: {output_path}", flush=True)
+    print(f"Elite cohort: {elite_count:,} seniors from {elite_cohort_path}", flush=True)
+    print(f"Lookahead window: {LOOKAHEAD_WINDOW}", flush=True)
+    print(f"Threads: {threads}; memory_limit: {memory_limit}; senior_chunk_size: {senior_chunk_size}", flush=True)
 
     senior_ids = [
         row[0] for row in con.execute(
             """
-            SELECT DISTINCT CAST(senior_id AS INTEGER) AS senior_id
-            FROM hrp.measurements
-            WHERE date IS NOT NULL
+            SELECT senior_id
+            FROM elite_seniors
             ORDER BY senior_id
             """
         ).fetchall()
@@ -393,7 +415,8 @@ def export_multimodal_features(
         """
         print(
             f"[{idx + 1:,}/{len(chunks):,}] seniors {senior_min}..{senior_max} "
-            f"({len(senior_chunk):,} ids)"
+            f"({len(senior_chunk):,} ids)",
+            flush=True,
         )
         con.execute(copy_sql)
 
@@ -408,6 +431,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH)
+    parser.add_argument("--elite-cohort", type=Path, default=DEFAULT_ELITE_COHORT_PATH)
     parser.add_argument("--threads", type=int, default=2)
     parser.add_argument("--memory-limit", default="12GB")
     parser.add_argument("--senior-chunk-size", type=int, default=250)
@@ -419,6 +443,7 @@ def main() -> None:
     export_multimodal_features(
         args.db,
         args.output,
+        args.elite_cohort,
         args.threads,
         args.memory_limit,
         args.senior_chunk_size,

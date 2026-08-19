@@ -31,6 +31,8 @@ class Config:
     LR = 1e-3
     EPOCHS = 20
     BETA = 0.001  # KL weight (annealing suggested for complex datasets)
+    KL_CYCLES = 4
+    KL_WARMUP_RATIO = 0.5
     PATIENCE = 5
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     NUM_WORKERS = 0 if os.name == "nt" else 4
@@ -112,11 +114,16 @@ def get_normalization_stats(npy_path: Path) -> Tuple[np.ndarray, np.ndarray]:
 class NumpyDataset(Dataset):
     def __init__(self, data, mean: np.ndarray, std: np.ndarray, labels: Optional[np.ndarray] = None):
         if isinstance(data, Path):
-            self.data = np.memmap(data, dtype='float32', mode='r')
-            n_samples = self.data.shape[0] // (Config.SEQ_LEN * Config.N_FEATURES)
-            self.data = self.data.reshape(n_samples, Config.SEQ_LEN, Config.N_FEATURES)
+            self.data = np.load(data, mmap_mode='r')
         else:
             self.data = data
+        if self.data.ndim != 3 or self.data.shape[1:] != (Config.SEQ_LEN, Config.N_FEATURES):
+            raise ValueError(
+                f"Expected sequence array shape (n, {Config.SEQ_LEN}, {Config.N_FEATURES}), "
+                f"got {self.data.shape}"
+            )
+        if labels is not None and len(labels) != len(self.data):
+            raise ValueError(f"Label length mismatch: X={len(self.data)}, y={len(labels)}")
         
         self.mean = torch.from_numpy(mean)
         self.std = torch.from_numpy(std)
@@ -209,12 +216,16 @@ def find_optimal_threshold(errors, labels):
 
 
 def get_beta(epoch, max_epochs=20, beta_max=0.001):
-    """Gradually increase KL weight from 0 to beta_max."""
-    return min(beta_max, beta_max * (epoch / (max_epochs * 0.5)))
+    """Cyclical KL annealing from 0 to beta_max within each cycle."""
+    cycle_length = max(max_epochs / Config.KL_CYCLES, 1)
+    cycle_progress = (epoch % cycle_length) / cycle_length
+    warmup_progress = min(cycle_progress / Config.KL_WARMUP_RATIO, 1.0)
+    return beta_max * warmup_progress
 
 # --- TRAINING ---
 def train():
     print(f"Starting training on {Config.DEVICE}")
+    print(f"+ Sequence contract: {Config.SEQ_LEN} time steps x {Config.N_FEATURES} features")
     
     # Setup Data
     mean, std = get_normalization_stats(Config.X_TRAIN)
@@ -252,7 +263,7 @@ def train():
     ).to(Config.DEVICE)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=Config.LR)
-    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
     
     Config.MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
     
@@ -321,7 +332,7 @@ def train():
                 'threshold': threshold_info['threshold'],
             }, Config.BEST_MODEL_PATH)
 
-            print(f"  ✓ Saved best model (val_loss: {best_val_loss:.4f})")
+            print(f"  Saved best model (val_loss: {best_val_loss:.4f})")
         else:
             patience_counter += 1
             print(f"  Patience: {patience_counter}/{Config.PATIENCE}")
