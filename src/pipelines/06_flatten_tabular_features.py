@@ -1,11 +1,9 @@
 """
-Window-level tabular feature extraction for horizontal baselines.
+Vectorized flattening of existing sequence datasets for tabular baselines.
 
-This pipeline converts each 96-step, 24-hour lookback window from
-multimodal_features.parquet into a single row of summary statistics. It reuses
-the senior-wise split manifest produced by 01_generate_dataset.py so classical
-baselines are evaluated on the same subject-isolated partitions as the sequence
-models.
+This script deliberately reuses the curated 3D anomaly-detection arrays instead
+of generating new sliding windows from Parquet. It converts each
+`[n_samples, 96, n_features]` split into one tabular row per existing sample.
 """
 
 from __future__ import annotations
@@ -13,59 +11,21 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
-import sys
 import warnings
 from pathlib import Path
-from typing import Iterable
 
 import numpy as np
 import pandas as pd
 
-try:
-    from src.components.utils import get_feature_columns
-except ModuleNotFoundError:
-    PROJECT_ROOT = Path(__file__).resolve().parents[2]
-    if str(PROJECT_ROOT) not in sys.path:
-        sys.path.insert(0, str(PROJECT_ROOT))
-    from src.components.utils import get_feature_columns
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data" / "processed" / "anomaly_detection"
-PARQUET_PATH = PROJECT_ROOT / "data" / "processed" / "multimodal_features.parquet"
-SPLIT_MANIFEST_PATH = DATA_DIR / "split_manifest.json"
+FEATURE_NAMES_PATH = PROJECT_ROOT / "data" / "processed" / "feature_names.txt"
+STATS_PATH = DATA_DIR / "normalization_stats.json"
 
-SEQ_LEN = int(os.getenv("SEQ_LEN", "96"))
-STEP_CAP = 2000
-
-PHYSIOLOGY_FEATURES = [
-    "temperature",
-    "heartrate",
-    "sbp",
-    "dbp",
-    "saturation",
-    "steps",
-    "pulse_pressure",
-    "shock_index",
-    "hr_volatility",
-    "bp_trend",
-]
-
-SPARSITY_FEATURES = [
-    "time_since_last_temperature",
-    "time_since_last_heartrate",
-    "time_since_last_sbp",
-    "time_since_last_dbp",
-    "time_since_last_pulse_pressure",
-    "time_since_last_steps",
-    "time_since_last_saturation",
-]
-
-STATIC_FEATURES = [
+STATIC_FEATURES = {
     "age",
     "gender",
-    "recent_event_burden",
     "cardiovascular",
     "metabolic_endocrine",
     "neurological",
@@ -77,324 +37,185 @@ STATIC_FEATURES = [
     "sensory",
     "other_functional_risk",
     "other",
-]
+}
 
-TEMPORAL_SNAPSHOT_FEATURES = [
-    "hour_sin",
-    "hour_cos",
-    "steps_rolling_sum_6h",
-]
-
-LABEL_COLUMNS = ["label_1", "label_2", "label_3"]
-ID_COLUMNS = ["senior_id", "timestamp"]
+SUMMARY_STATS = {
+    "mean": np.nanmean,
+    "std": np.nanstd,
+    "max": np.nanmax,
+    "min": np.nanmin,
+}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def parquet_files(parquet_path: Path) -> list[Path]:
-    return sorted(parquet_path.glob("*.parquet")) if parquet_path.is_dir() else [parquet_path]
-
-
-def clean_part(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    if "steps" in df.columns:
-        df["steps"] = df["steps"].clip(upper=STEP_CAP)
-    if "bp_trend" in df.columns:
-        df["bp_trend"] = df["bp_trend"].fillna(0.0)
-    return df.sort_values(["senior_id", "timestamp"]).reset_index(drop=True)
-
-
-def load_split_manifest(path: Path) -> dict[str, list[str]]:
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Split manifest not found: {path}. Run src/pipelines/01_generate_dataset.py first."
-        )
-    with open(path, "r", encoding="utf-8") as f:
-        manifest = json.load(f)
-    return {
-        "train": list(map(str, manifest["train_seniors"])),
-        "val": list(map(str, manifest["val_seniors"])),
-        "test": list(map(str, manifest["test_seniors"])),
-    }
-
-
-def resolve_columns(parquet_path: Path) -> tuple[list[str], list[str], list[str], list[str]]:
-    first_part = parquet_files(parquet_path)[0]
-    schema_df = pd.read_parquet(first_part).head(0)
-    model_features = get_feature_columns(schema_df)
-    physiology = [col for col in PHYSIOLOGY_FEATURES if col in model_features]
-    sparsity = [col for col in SPARSITY_FEATURES if col in model_features]
-    static = [col for col in STATIC_FEATURES if col in model_features]
-    temporal = [col for col in TEMPORAL_SNAPSHOT_FEATURES if col in model_features]
-    missing = sorted(
-        (set(PHYSIOLOGY_FEATURES) | set(SPARSITY_FEATURES) | set(STATIC_FEATURES))
-        - set(model_features)
-    )
-    if missing:
-        logger.warning("Expected feature columns absent from parquet schema: %s", missing)
-    return physiology, sparsity, static, temporal
-
-
-def iter_senior_frames(
-    parquet_path: Path,
-    seniors: Iterable[str],
-    read_columns: list[str],
-) -> Iterable[pd.DataFrame]:
-    senior_set = set(map(str, seniors))
-    for part_path in parquet_files(parquet_path):
-        part = pd.read_parquet(part_path, columns=read_columns)
-        part = part[part["senior_id"].astype(str).isin(senior_set)]
-        if part.empty:
-            continue
-        part = clean_part(part)
-        for _, df_senior in part.groupby("senior_id", sort=False):
-            yield df_senior.reset_index(drop=True)
-
-
-def nan_column_stat(window: np.ndarray, stat: str) -> np.ndarray:
-    """Column-wise NaN-aware reducer that leaves all-missing columns as NaN without warnings."""
-    reducers = {
-        "mean": np.nanmean,
-        "std": np.nanstd,
-        "min": np.nanmin,
-        "max": np.nanmax,
-        "median": np.nanmedian,
-    }
-    if stat not in reducers:
-        raise ValueError(f"Unsupported stat: {stat}")
+def reduce_nan_stat(values: np.ndarray, reducer) -> np.ndarray:
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
         warnings.filterwarnings("ignore", message="All-NaN slice encountered", category=RuntimeWarning)
         warnings.filterwarnings("ignore", message="Degrees of freedom <= 0 for slice.", category=RuntimeWarning)
-        return reducers[stat](window, axis=0)
+        return reducer(values, axis=1)
 
 
-def nan_skew(window: np.ndarray) -> np.ndarray:
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
-        mean = np.nanmean(window, axis=0)
-        centered = window - mean
-        second = np.nanmean(centered ** 2, axis=0)
-        third = np.nanmean(centered ** 3, axis=0)
-    denom = np.power(second, 1.5)
-    return np.divide(third, denom, out=np.zeros_like(third), where=denom > 1e-12)
+def load_feature_names(feature_names_path: Path, stats_path: Path) -> list[str]:
+    if feature_names_path.exists():
+        text = feature_names_path.read_text(encoding="utf-8").strip()
+        if not text:
+            raise ValueError(f"Feature names file is empty: {feature_names_path}")
+        if text.startswith("["):
+            names = json.loads(text)
+        else:
+            names = [line.strip() for line in text.splitlines() if line.strip()]
+        return list(map(str, names))
 
-
-def summarize_window(
-    window: pd.DataFrame,
-    target_row: pd.Series,
-    physiology_cols: list[str],
-    sparsity_cols: list[str],
-    static_cols: list[str],
-    temporal_cols: list[str],
-) -> dict[str, float | int | str | pd.Timestamp]:
-    row: dict[str, float | int | str | pd.Timestamp] = {
-        "senior_id": target_row["senior_id"],
-        "target_timestamp": target_row["timestamp"],
-    }
-
-    if physiology_cols:
-        values = window[physiology_cols].to_numpy(dtype=np.float32, copy=True)
-        stats = {
-            "mean": nan_column_stat(values, "mean"),
-            "std": nan_column_stat(values, "std"),
-            "min": nan_column_stat(values, "min"),
-            "max": nan_column_stat(values, "max"),
-            "median": nan_column_stat(values, "median"),
-            "skew": nan_skew(values),
-            "last_value": values[-1],
-            "delta": values[-1] - values[0],
-        }
-        for stat_name, stat_values in stats.items():
-            for col, value in zip(physiology_cols, stat_values):
-                row[f"{col}_{stat_name}"] = float(value) if np.isfinite(value) else np.nan
-
-    if sparsity_cols:
-        gaps = window[sparsity_cols].to_numpy(dtype=np.float32, copy=True)
-        stats = {
-            "max_gap": nan_column_stat(gaps, "max"),
-            "mean_gap": nan_column_stat(gaps, "mean"),
-            "final_staleness": gaps[-1],
-        }
-        for stat_name, stat_values in stats.items():
-            for col, value in zip(sparsity_cols, stat_values):
-                row[f"{col}_{stat_name}"] = float(value) if np.isfinite(value) else np.nan
-
-    for col in static_cols + temporal_cols:
-        value = window[col].iloc[-1]
-        row[col] = value
-
-    return row
-
-
-def extract_split(
-    split_name: str,
-    seniors: list[str],
-    parquet_path: Path,
-    output_dir: Path,
-    seq_len: int,
-    physiology_cols: list[str],
-    sparsity_cols: list[str],
-    static_cols: list[str],
-    temporal_cols: list[str],
-    max_windows: int | None,
-) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
-    read_columns = list(
-        dict.fromkeys(ID_COLUMNS + LABEL_COLUMNS + physiology_cols + sparsity_cols + static_cols + temporal_cols)
-    )
-    rows: list[dict] = []
-    labels: list[int] = []
-    pure_healthy: list[bool] = []
-
-    for senior_idx, df_senior in enumerate(iter_senior_frames(parquet_path, seniors, read_columns), start=1):
-        if len(df_senior) <= seq_len:
-            continue
-        label_matrix = df_senior[LABEL_COLUMNS].to_numpy(dtype=np.int8, copy=True)
-        all_normal = (label_matrix.sum(axis=1) == 0).astype(np.int32)
-        normal_prefix = np.concatenate([[0], np.cumsum(all_normal)])
-
-        for target_idx in range(seq_len, len(df_senior)):
-            window_start = target_idx - seq_len
-            window = df_senior.iloc[window_start:target_idx]
-            target_row = df_senior.iloc[target_idx]
-            rows.append(
-                summarize_window(
-                    window,
-                    target_row,
-                    physiology_cols,
-                    sparsity_cols,
-                    static_cols,
-                    temporal_cols,
-                )
+    if stats_path.exists():
+        with open(stats_path, "r", encoding="utf-8") as f:
+            stats = json.load(f)
+        names = stats.get("feature_cols")
+        if names:
+            logger.warning(
+                "%s not found; using feature_cols from %s.",
+                feature_names_path,
+                stats_path,
             )
-            labels.append(int(target_row["label_3"]))
-            input_is_normal = (normal_prefix[target_idx] - normal_prefix[window_start]) == seq_len
-            pure_healthy.append(bool(input_is_normal and int(target_row["label_3"]) == 0))
+            return list(map(str, names))
 
-            if max_windows is not None and len(rows) >= max_windows:
-                logger.info("%s reached max_windows=%s", split_name, max_windows)
-                break
-        if max_windows is not None and len(rows) >= max_windows:
-            break
-        if senior_idx % 25 == 0:
-            logger.info("%s seniors processed=%s; windows=%s", split_name, senior_idx, len(rows))
+    raise FileNotFoundError(
+        f"Could not resolve feature names. Expected {feature_names_path} or "
+        f"feature_cols in {stats_path}."
+    )
 
-    if not rows:
-        raise RuntimeError(f"No tabular windows generated for split '{split_name}'.")
 
-    X = pd.DataFrame(rows)
-    y = np.asarray(labels, dtype=np.int8)
-    pure_mask = np.asarray(pure_healthy, dtype=bool)
+def load_targets(data_dir: Path, split: str, n_samples: int) -> np.ndarray:
+    direct_path = data_dir / f"y_{split}.npy"
+    l3_path = data_dir / f"y_{split}_l3.npy"
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    X_path = output_dir / f"X_{split_name}_flat.parquet"
-    y_path = output_dir / f"y_{split_name}_l3.npy"
-    mask_path = output_dir / f"{split_name}_pure_healthy_mask.npy"
+    if direct_path.exists():
+        y = np.load(direct_path)
+    elif split == "train":
+        logger.warning("No train target file found; generating all-zero y_train_l3.npy.")
+        y = np.zeros(n_samples, dtype=np.int8)
+    elif l3_path.exists():
+        y = np.load(l3_path)
+    else:
+        raise FileNotFoundError(f"Missing target array for split '{split}': {direct_path}")
 
-    X.to_parquet(X_path, index=False)
-    np.save(y_path, y)
-    np.save(mask_path, pure_mask)
+    y = np.asarray(y).astype(np.int8)
+    if y.shape[0] != n_samples:
+        raise ValueError(f"Target length mismatch for {split}: X={n_samples}, y={y.shape[0]}")
+    return y
+
+
+def flatten_sequences(X: np.ndarray, feature_names: list[str]) -> pd.DataFrame:
+    if X.ndim != 3:
+        raise ValueError(f"Expected a 3D array [samples, time, features], got shape {X.shape}")
+    if X.shape[2] != len(feature_names):
+        raise ValueError(
+            f"Feature name count mismatch: X has {X.shape[2]} features, "
+            f"but {len(feature_names)} names were provided."
+        )
+
+    dynamic_indices = [idx for idx, name in enumerate(feature_names) if name not in STATIC_FEATURES]
+    static_indices = [idx for idx, name in enumerate(feature_names) if name in STATIC_FEATURES]
+
+    parts: list[np.ndarray] = []
+    columns: list[str] = []
+
+    if dynamic_indices:
+        dynamic = X[:, :, dynamic_indices]
+        for stat_name, reducer in SUMMARY_STATS.items():
+            stat_values = reduce_nan_stat(dynamic, reducer)
+            parts.append(stat_values)
+            columns.extend(f"{feature_names[idx]}_{stat_name}" for idx in dynamic_indices)
+
+    if static_indices:
+        static_values = X[:, 0, static_indices]
+        parts.append(static_values)
+        columns.extend(feature_names[idx] for idx in static_indices)
+
+    X_flat = np.concatenate(parts, axis=1).astype(np.float32, copy=False)
+    return pd.DataFrame(X_flat, columns=columns)
+
+
+def process_split(data_dir: Path, split: str, feature_names: list[str]) -> dict:
+    x_path = data_dir / f"X_{split}.npy"
+    if not x_path.exists():
+        raise FileNotFoundError(f"Missing sequence array for split '{split}': {x_path}")
+
+    logger.info("Loading %s", x_path)
+    X = np.load(x_path)
+    logger.info("%s shape: %s", split, X.shape)
+
+    X_flat = flatten_sequences(X, feature_names)
+    y = load_targets(data_dir, split, X.shape[0])
+
+    x_out = data_dir / f"X_{split}_flat.parquet"
+    y_out = data_dir / f"y_{split}_l3.npy"
+    mask_out = data_dir / f"{split}_pure_healthy_mask.npy"
+
+    X_flat.to_parquet(x_out, index=False)
+    np.save(y_out, y)
+    np.save(mask_out, y == 0)
+
     logger.info(
-        "Saved %s: X=%s y=%s positives=%s pure_healthy=%s",
-        split_name,
-        X.shape,
+        "Saved %s: X_flat=%s, y=%s, positives=%s",
+        split,
+        X_flat.shape,
         y.shape,
         int(y.sum()),
-        int(pure_mask.sum()),
     )
-    return X, y, pure_mask
-
-
-def write_metadata(
-    output_dir: Path,
-    seq_len: int,
-    physiology_cols: list[str],
-    sparsity_cols: list[str],
-    static_cols: list[str],
-    temporal_cols: list[str],
-    split_shapes: dict[str, dict],
-) -> None:
-    feature_names = [
-        col
-        for col in split_shapes["train"]["columns"]
-        if col not in {"senior_id", "target_timestamp"}
-    ]
-    metadata = {
-        "source_parquet": str(PARQUET_PATH),
-        "split_manifest": str(SPLIT_MANIFEST_PATH),
-        "seq_len": seq_len,
-        "lookback_hours": seq_len * 5 / 60,
-        "target": "label_3 at the row immediately after the lookback window",
-        "physiology_columns": physiology_cols,
-        "sparsity_columns": sparsity_cols,
-        "static_columns": static_cols,
-        "temporal_snapshot_columns": temporal_cols,
-        "feature_names": feature_names,
-        "split_shapes": split_shapes,
-        "pure_healthy_mask_policy": (
-            "True when all label_1/label_2/label_3 values are zero inside the "
-            "lookback window and target label_3 is zero."
-        ),
+    return {
+        "X_source": str(x_path),
+        "X_flat_path": str(x_out),
+        "y_path": str(y_out),
+        "pure_healthy_mask_path": str(mask_out),
+        "X_shape": list(X.shape),
+        "X_flat_shape": list(X_flat.shape),
+        "y_shape": list(y.shape),
+        "positives": int(y.sum()),
+        "columns": list(X_flat.columns),
     }
-    with open(output_dir / "flat_feature_metadata.json", "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2, default=str)
+
+
+def write_metadata(data_dir: Path, feature_names: list[str], split_metadata: dict[str, dict]) -> None:
+    dynamic_features = [name for name in feature_names if name not in STATIC_FEATURES]
+    static_features = [name for name in feature_names if name in STATIC_FEATURES]
+    metadata = {
+        "source": "Existing curated anomaly_detection X_*.npy sequence arrays",
+        "flattening": {
+            "dynamic_temporal_features": dynamic_features,
+            "static_features": static_features,
+            "dynamic_temporal_stats": list(SUMMARY_STATS.keys()),
+            "static_policy": "first time step value, X[:, 0, feature_index]",
+            "sample_iteration": False,
+        },
+        "feature_names": feature_names,
+        "splits": split_metadata,
+    }
+    with open(data_dir / "flat_feature_metadata.json", "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Extract tabular statistics from 96-step windows.")
-    parser.add_argument("--parquet", type=Path, default=PARQUET_PATH)
-    parser.add_argument("--split-manifest", type=Path, default=SPLIT_MANIFEST_PATH)
-    parser.add_argument("--output-dir", type=Path, default=DATA_DIR)
-    parser.add_argument("--seq-len", type=int, default=SEQ_LEN)
-    parser.add_argument(
-        "--max-windows-per-split",
-        type=int,
-        default=int(os.getenv("MAX_WINDOWS_PER_SPLIT", "0")),
-        help="Optional smoke-test cap. Use 0 for all windows.",
+    parser = argparse.ArgumentParser(
+        description="Vectorized flattening of existing 3D sequence arrays for tabular baselines."
     )
+    parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
+    parser.add_argument("--feature-names", type=Path, default=FEATURE_NAMES_PATH)
+    parser.add_argument("--stats-path", type=Path, default=STATS_PATH)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    max_windows = args.max_windows_per_split or None
-    splits = load_split_manifest(args.split_manifest)
-    physiology_cols, sparsity_cols, static_cols, temporal_cols = resolve_columns(args.parquet)
-
-    split_shapes: dict[str, dict] = {}
-    for split_name in ["train", "val", "test"]:
-        X, y, pure_mask = extract_split(
-            split_name,
-            splits[split_name],
-            args.parquet,
-            args.output_dir,
-            args.seq_len,
-            physiology_cols,
-            sparsity_cols,
-            static_cols,
-            temporal_cols,
-            max_windows,
-        )
-        split_shapes[split_name] = {
-            "X_shape": list(X.shape),
-            "y_shape": list(y.shape),
-            "positives": int(y.sum()),
-            "pure_healthy": int(pure_mask.sum()),
-            "columns": list(X.columns),
-        }
-
-    write_metadata(
-        args.output_dir,
-        args.seq_len,
-        physiology_cols,
-        sparsity_cols,
-        static_cols,
-        temporal_cols,
-        split_shapes,
-    )
-    logger.info("Tabular feature extraction complete: %s", args.output_dir)
+    feature_names = load_feature_names(args.feature_names, args.stats_path)
+    split_metadata = {
+        split: process_split(args.data_dir, split, feature_names)
+        for split in ["train", "val", "test"]
+    }
+    write_metadata(args.data_dir, feature_names, split_metadata)
+    logger.info("Vectorized tabular flattening complete: %s", args.data_dir)
 
 
 if __name__ == "__main__":
