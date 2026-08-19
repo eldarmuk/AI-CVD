@@ -302,7 +302,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the supervised sequence crisis classifier.")
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
-    parser.add_argument("--supervised-train-archive", type=Path, default=DATA_DIR / "few_shot_train_level3_balanced.npz")
+    parser.add_argument("--supervised-train-archive", type=Path, default=DATA_DIR / "few_shot_train_intervention_balanced.npz")
     parser.add_argument("--model-dir", type=Path, default=MODEL_DIR)
     parser.add_argument("--report-dir", type=Path, default=REPORT_DIR)
     parser.add_argument("--epochs", type=int, default=200)

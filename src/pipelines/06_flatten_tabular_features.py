@@ -22,7 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data" / "processed" / "anomaly_detection"
 FEATURE_NAMES_PATH = PROJECT_ROOT / "data" / "processed" / "feature_names.txt"
 STATS_PATH = DATA_DIR / "normalization_stats.json"
-SUPERVISED_TRAIN_ARCHIVE = DATA_DIR / "few_shot_train_level3_balanced.npz"
+SUPERVISED_TRAIN_ARCHIVE = DATA_DIR / "few_shot_train_intervention_balanced.npz"
 
 STATIC_FEATURES = {
     "age",

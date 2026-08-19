@@ -1,7 +1,7 @@
 """
-Extract a mixed supervised Level 3 training cache from the current Parquet.
+Extract a mixed supervised Level 2/3 training cache from the current Parquet.
 
-This script rebuilds data/processed/anomaly_detection/few_shot_train_level3_balanced.npz
+This script rebuilds data/processed/anomaly_detection/few_shot_train_intervention_balanced.npz
 from the active multimodal_features.parquet and the current train split manifest.
 It is intended to keep supervised classical baselines temporally aligned with
 the current lookahead label horizon.
@@ -27,7 +27,7 @@ DATA_DIR = PROJECT_ROOT / "data" / "processed"
 PARQUET_PATH = DATA_DIR / "multimodal_features.parquet"
 ANOMALY_DIR = DATA_DIR / "anomaly_detection"
 SPLIT_MANIFEST_PATH = ANOMALY_DIR / "split_manifest.json"
-OUTPUT_PATH = ANOMALY_DIR / "few_shot_train_level3_balanced.npz"
+OUTPUT_PATH = ANOMALY_DIR / "few_shot_train_intervention_balanced.npz"
 
 SEQ_LEN = int(os.getenv("SEQ_LEN", "96"))
 STEP_CAP = 2000
@@ -46,14 +46,18 @@ def load_feature_columns(parquet_path: Path) -> list[str]:
     return get_feature_columns(schema_df)
 
 
-def load_train_l3_seniors(split_manifest_path: Path) -> list[str]:
+def load_train_actionable_seniors(split_manifest_path: Path) -> list[str]:
     if not split_manifest_path.exists():
         raise FileNotFoundError(
             f"Split manifest not found: {split_manifest_path}. Run 01_generate_dataset.py first."
         )
     with open(split_manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
-    candidates = manifest.get("train_l3_excluded_seniors") or manifest.get("train_seniors")
+    candidates = (
+        manifest.get("train_actionable_excluded_seniors")
+        or manifest.get("train_l3_excluded_seniors")
+        or manifest.get("train_seniors")
+    )
     if not candidates:
         raise ValueError("No train seniors found in split manifest.")
     return list(map(str, candidates))
@@ -87,7 +91,7 @@ def iter_senior_frames(
 
 def collect_supervised_windows(
     parquet_path: Path,
-    train_l3_seniors: list[str],
+    train_actionable_seniors: list[str],
     feature_cols: list[str],
     seq_len: int,
 ) -> tuple[list[np.ndarray], list[np.ndarray], set[str], int]:
@@ -97,7 +101,7 @@ def collect_supervised_windows(
     positive_seniors: set[str] = set()
     scanned_seniors = 0
 
-    for df_senior in iter_senior_frames(parquet_path, train_l3_seniors, read_columns):
+    for df_senior in iter_senior_frames(parquet_path, train_actionable_seniors, read_columns):
         scanned_seniors += 1
         if len(df_senior) <= seq_len:
             continue
@@ -114,7 +118,7 @@ def collect_supervised_windows(
         for target_idx in range(seq_len, len(df_senior)):
             window_start = target_idx - seq_len
             lookback_is_normal = (prefix[target_idx] - prefix[window_start]) == seq_len
-            if lookback_is_normal and l3[target_idx] == 1:
+            if lookback_is_normal and ((l2[target_idx] == 1) or (l3[target_idx] == 1)):
                 senior_pos_starts.append(window_start)
 
         for target_idx in range(seq_len, len(df_senior), seq_len):
@@ -129,7 +133,7 @@ def collect_supervised_windows(
 
         if scanned_seniors % 10 == 0:
             logger.info(
-                "Scanned %s train Level 3 seniors; positives=%s; negative candidates=%s",
+                "Scanned %s train Level 2/3 seniors; positives=%s; negative candidates=%s",
                 scanned_seniors,
                 len(positive_windows),
                 len(negative_candidates),
@@ -147,7 +151,7 @@ def save_balanced_cache(
     seq_len: int,
 ) -> None:
     if not positive_windows:
-        raise RuntimeError("No Level 3 positive training windows found in the train split.")
+        raise RuntimeError("No Level 2/3 positive training windows found in the train split.")
     if not negative_candidates:
         raise RuntimeError("No normal negative training windows found for positive train seniors.")
 
@@ -169,7 +173,7 @@ def save_balanced_cache(
         "source_parquet": str(PARQUET_PATH),
         "split_manifest": str(SPLIT_MANIFEST_PATH),
         "seq_len": seq_len,
-        "target": "label_3 with target row immediately after the 96-step lookback",
+        "target": "(label_2 OR label_3) with target row immediately after the 96-step lookback",
         "lookback_policy": "positive and negative windows require all labels normal inside the lookback",
         "negative_policy": "sampled from the same train seniors that contributed positive windows",
         "positive_windows_available": len(positive_windows),
@@ -192,7 +196,7 @@ def save_balanced_cache(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Extract balanced mixed Level 3 train cache.")
+    parser = argparse.ArgumentParser(description="Extract balanced mixed Level 2/3 train cache.")
     parser.add_argument("--parquet", type=Path, default=PARQUET_PATH)
     parser.add_argument("--split-manifest", type=Path, default=SPLIT_MANIFEST_PATH)
     parser.add_argument("--output", type=Path, default=OUTPUT_PATH)
@@ -203,13 +207,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     feature_cols = load_feature_columns(args.parquet)
-    train_l3_seniors = load_train_l3_seniors(args.split_manifest)
-    logger.info("Using %s train Level 3 candidate seniors from split manifest.", len(train_l3_seniors))
+    train_actionable_seniors = load_train_actionable_seniors(args.split_manifest)
+    logger.info("Using %s train Level 2/3 candidate seniors from split manifest.", len(train_actionable_seniors))
     logger.info("Feature columns: %s", len(feature_cols))
 
     positives, negatives, positive_seniors, scanned_seniors = collect_supervised_windows(
         args.parquet,
-        train_l3_seniors,
+        train_actionable_seniors,
         feature_cols,
         args.seq_len,
     )
