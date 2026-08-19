@@ -6,7 +6,7 @@ Generates sequences for unsupervised anomaly detection from multimodal_features.
 Key Features:
 - Splits seniors 70/15/15 (Train/Val/Test)
 - Training data: Only "Normal" windows (label_1=0, label_2=0, label_3=0)
-- Val/Test data: 50% Level 3 crisis windows (label_3=1) + 50% Normal windows
+- Val/Test data: 50% clinically actionable windows ((label_2=1) OR (label_3=1)) + 50% Normal windows
 - Preserves senior integrity (no mixing train/val/test seniors)
 """
 
@@ -82,24 +82,25 @@ def discover_dataset_metadata(parquet_path: Path) -> Tuple[List[str], List, set]
             """
         ).fetchall()
     ]
-    l3_seniors = {
+    actionable_seniors = {
         row[0] for row in con.execute(
             f"""
             SELECT senior_id
             FROM read_parquet('{scan_path}')
             GROUP BY senior_id
-            HAVING max(CAST(label_3 AS INTEGER)) = 1
+            HAVING max(CAST(label_2 AS INTEGER)) = 1
+                OR max(CAST(label_3 AS INTEGER)) = 1
             """
         ).fetchall()
     }
     con.close()
-    return columns, seniors, l3_seniors
+    return columns, seniors, actionable_seniors
 
 
-def discover_l3_alert_seniors_from_db(db_path: Path) -> set:
-    """Read true Level 3 alert history from the processed database when available."""
+def discover_actionable_alert_seniors_from_db(db_path: Path) -> set:
+    """Read true Level 2/3 alert history from the processed database when available."""
     if not db_path.exists():
-        logger.warning(f"Processed DB not found for Level 3 senior audit: {db_path}")
+        logger.warning(f"Processed DB not found for Level 2/3 senior audit: {db_path}")
         return set()
 
     conn = sqlite3.connect(db_path)
@@ -109,42 +110,42 @@ def discover_l3_alert_seniors_from_db(db_path: Path) -> set:
         }
         if 'severity' not in alert_cols:
             logger.warning(
-                "Skipping DB Level 3 senior audit because alerts.severity is absent; "
-                "using Parquet label_3 history only."
+                "Skipping DB Level 2/3 senior audit because alerts.severity is absent; "
+                "using Parquet label_2/label_3 history only."
             )
             return set()
         rows = conn.execute(
-            "SELECT DISTINCT senior_id FROM alerts WHERE severity = 3"
+            "SELECT DISTINCT senior_id FROM alerts WHERE severity IN (2, 3)"
         ).fetchall()
     finally:
         conn.close()
     return {row[0] for row in rows}
 
 
-def split_senior_ids(unique_seniors: List, l3_seniors: set) -> Tuple[List, List, List]:
+def split_senior_ids(unique_seniors: List, actionable_seniors: set) -> Tuple[List, List, List]:
     """
     Stratified senior split.
 
-    Reserve fixed Level 3 senior counts for validation/test, leave remaining
-    Level 3 seniors in train where the pure-train filter excludes them from
+    Reserve fixed Level 2/3 senior counts for validation/test, leave remaining
+    Level 2/3 seniors in train where the pure-train filter excludes them from
     X_train, then distribute healthy seniors at the requested ratios.
     """
     rng = random.Random(RANDOM_SEED)
     unique_set = set(unique_seniors)
-    l3_pool = sorted(unique_set & set(l3_seniors))
-    healthy_pool = sorted(unique_set - set(l3_pool))
-    rng.shuffle(l3_pool)
+    actionable_pool = sorted(unique_set & set(actionable_seniors))
+    healthy_pool = sorted(unique_set - set(actionable_pool))
+    rng.shuffle(actionable_pool)
     rng.shuffle(healthy_pool)
 
-    if len(l3_pool) < (VAL_L3_SENIORS + TEST_L3_SENIORS):
+    if len(actionable_pool) < (VAL_L3_SENIORS + TEST_L3_SENIORS):
         raise ValueError(
-            f"Need at least {VAL_L3_SENIORS + TEST_L3_SENIORS} Level 3 seniors "
-            f"for val/test reservation, found {len(l3_pool)}."
+            f"Need at least {VAL_L3_SENIORS + TEST_L3_SENIORS} Level 2/3 seniors "
+            f"for val/test reservation, found {len(actionable_pool)}."
         )
 
-    val_l3 = l3_pool[:VAL_L3_SENIORS]
-    test_l3 = l3_pool[VAL_L3_SENIORS:VAL_L3_SENIORS + TEST_L3_SENIORS]
-    train_l3 = l3_pool[VAL_L3_SENIORS + TEST_L3_SENIORS:]
+    val_l3 = actionable_pool[:VAL_L3_SENIORS]
+    test_l3 = actionable_pool[VAL_L3_SENIORS:VAL_L3_SENIORS + TEST_L3_SENIORS]
+    train_l3 = actionable_pool[VAL_L3_SENIORS + TEST_L3_SENIORS:]
 
     n_healthy = len(healthy_pool)
     n_val_healthy = int(round(n_healthy * HEALTHY_VAL_RATIO))
@@ -162,7 +163,7 @@ def split_senior_ids(unique_seniors: List, l3_seniors: set) -> Tuple[List, List,
     rng.shuffle(test_seniors)
 
     logger.info(
-        f"Level 3 seniors: train={len(train_l3)}, val={len(val_l3)}, test={len(test_l3)}"
+        f"Level 2/3 seniors: train={len(train_l3)}, val={len(val_l3)}, test={len(test_l3)}"
     )
     logger.info(
         f"Healthy seniors: train={len(train_healthy)}, val={len(val_healthy)}, test={len(test_healthy)}"
@@ -195,7 +196,7 @@ def write_split_manifest(
         'random_seed': RANDOM_SEED,
         'split_unit': 'senior_id',
         'stratification': {
-            'minority_class': 'Level 3 / label_3 senior history',
+            'minority_class': 'Level 2 or Level 3 / label_2 OR label_3 senior history',
             'val_l3_seniors': VAL_L3_SENIORS,
             'test_l3_seniors': TEST_L3_SENIORS,
             'healthy_val_ratio': HEALTHY_VAL_RATIO,
@@ -204,9 +205,10 @@ def write_split_manifest(
         'train_seniors': list(map(str, train_seniors)),
         'train_pure_healthy_seniors': list(map(str, train_pure_healthy_seniors)),
         'train_l3_excluded_seniors': list(map(str, train_l3_excluded_seniors)),
+        'train_actionable_excluded_seniors': list(map(str, train_l3_excluded_seniors)),
         'val_seniors': list(map(str, val_seniors)),
         'test_seniors': list(map(str, test_seniors)),
-        'train_policy': 'X_train uses only train_pure_healthy_seniors: senior_id with zero label_3 rows in entire history.',
+        'train_policy': 'X_train uses only train_pure_healthy_seniors: senior_id with zero label_2/label_3 rows in entire history.',
         'note': 'Rows are streamed from multimodal_features.parquet; full split parquet copies are not materialized.',
     }
     with open(SPLIT_MANIFEST_PATH, 'w') as f:
@@ -356,7 +358,7 @@ def collect_eval_candidates_streaming(
         for target_idx in range(seq_len, n_rows):
             window_start = target_idx - seq_len
             window_is_pure_normal = (prefix[target_idx] - prefix[window_start]) == seq_len
-            if window_is_pure_normal and l3[target_idx] == 1:
+            if window_is_pure_normal and ((l2[target_idx] == 1) or (l3[target_idx] == 1)):
                 pos_windows.append(feats[window_start:target_idx])
 
         neg_targets = np.arange(seq_len, n_rows, seq_len, dtype=np.int64)
@@ -730,7 +732,7 @@ def generate_testing_data(df, test_seniors, seq_len, feature_cols, split_label: 
                 l2[window_start:window_end].sum() == 0 and
                 l3[window_start:window_end].sum() == 0
             )
-            if window_is_pure_normal and l3[target_idx] == 1:
+            if window_is_pure_normal and ((l2[target_idx] == 1) or (l3[target_idx] == 1)):
                 pos_windows.append(feats[window_start:window_end])
                 
         for target_idx in range(seq_len, n_rows, seq_len):
@@ -817,18 +819,18 @@ Configuration:
   Step cap: {STEP_CAP}
   Train split seniors: {len(train_seniors):,}
   Pure healthy train seniors used for X_train: {len(train_pure_healthy_seniors):,}
-  Train seniors excluded due to any Level 3 history: {len(train_l3_excluded_seniors):,}
+  Train seniors excluded due to any Level 2/3 history: {len(train_l3_excluded_seniors):,}
   Val seniors: {len(val_seniors):,}
   Test seniors: {len(test_seniors):,}
   Random seed: {RANDOM_SEED}
   Train max windows: {TRAIN_MAX_WINDOWS}
-  Stratified Level 3 senior reservation: val={VAL_L3_SENIORS}, test={TEST_L3_SENIORS}
+  Stratified Level 2/3 senior reservation: val={VAL_L3_SENIORS}, test={TEST_L3_SENIORS}
   Healthy senior split ratios: train={1.0 - HEALTHY_VAL_RATIO - HEALTHY_TEST_RATIO:.3f}, val={HEALTHY_VAL_RATIO:.3f}, test={HEALTHY_TEST_RATIO:.3f}
 
 Training Data:
   Shape: {X_train.shape}
   Samples: {len(X_train):,}
-  Cohort: senior_id with zero label_3 rows in entire history
+  Cohort: senior_id with zero label_2/label_3 rows in entire history
   Windows: all labels normal within lookback
 
 Testing Data:
@@ -865,21 +867,21 @@ def main():
     logger.info("=" * 100)
 
     logger.info(f"Discovering Parquet metadata from {PARQUET_PATH}...")
-    columns, unique_seniors, parquet_l3_seniors = discover_dataset_metadata(PARQUET_PATH)
-    db_l3_seniors = discover_l3_alert_seniors_from_db(PROCESSED_DB_PATH)
-    l3_seniors = parquet_l3_seniors | db_l3_seniors
+    columns, unique_seniors, parquet_actionable_seniors = discover_dataset_metadata(PARQUET_PATH)
+    db_actionable_seniors = discover_actionable_alert_seniors_from_db(PROCESSED_DB_PATH)
+    actionable_seniors = parquet_actionable_seniors | db_actionable_seniors
     logger.info(
         f"Columns: {len(columns)}; seniors: {len(unique_seniors):,}; "
-        f"seniors with Level 3 history: {len(l3_seniors):,} "
-        f"(parquet labels={len(parquet_l3_seniors):,}, db alerts={len(db_l3_seniors):,})"
+        f"seniors with Level 2/3 history: {len(actionable_seniors):,} "
+        f"(parquet labels={len(parquet_actionable_seniors):,}, db alerts={len(db_actionable_seniors):,})"
     )
 
-    train_seniors, val_seniors, test_seniors = split_senior_ids(unique_seniors, l3_seniors)
-    train_pure_healthy_seniors = [sid for sid in train_seniors if sid not in l3_seniors]
-    train_l3_excluded_seniors = [sid for sid in train_seniors if sid in l3_seniors]
+    train_seniors, val_seniors, test_seniors = split_senior_ids(unique_seniors, actionable_seniors)
+    train_pure_healthy_seniors = [sid for sid in train_seniors if sid not in actionable_seniors]
+    train_l3_excluded_seniors = [sid for sid in train_seniors if sid in actionable_seniors]
     logger.info(
         f"Pure healthy train seniors: {len(train_pure_healthy_seniors):,}; "
-        f"excluded train seniors with Level 3 history: {len(train_l3_excluded_seniors):,}"
+        f"excluded train seniors with Level 2/3 history: {len(train_l3_excluded_seniors):,}"
     )
     write_split_manifest(
         train_seniors,
