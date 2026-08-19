@@ -33,6 +33,8 @@ SUPERVISED_SEQ_DIR = PROJECT_ROOT / "models" / "supervised_seq"
 SUPERVISED_SEQ_REPORT_DIR = PROJECT_ROOT / "reports" / "supervised_seq"
 CGTA_MODEL_DIR = PROJECT_ROOT / "models" / "cgta_net"
 CGTA_REPORT_DIR = PROJECT_ROOT / "reports" / "cgta_net"
+HYBRID_CGTA_MODEL_DIR = PROJECT_ROOT / "models" / "hybrid_cgta"
+HYBRID_CGTA_REPORT_DIR = PROJECT_ROOT / "reports" / "hybrid_cgta"
 REPORT_DIR = PROJECT_ROOT / "reports"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -203,6 +205,46 @@ def load_cgta_metrics(cgta_model_dir: Path, expected_test_windows: int | None = 
     )
 
 
+def load_hybrid_cgta_metrics(hybrid_model_dir: Path, expected_test_windows: int | None = None) -> pd.DataFrame:
+    path = hybrid_model_dir / "metrics.json"
+    if not path.exists():
+        return pd.DataFrame()
+    metrics = read_json(path)
+    if not metric_window_count_matches(metrics, expected_test_windows, "test_windows"):
+        logger.warning("Skipping stale %s because its test window count does not match the current split.", path)
+        return pd.DataFrame()
+    return pd.DataFrame(
+        [
+            {
+                "model": metrics.get("model", "Hybrid-CGTA Net"),
+                "model_family": metrics.get("model_family", "Hybrid Circadian-Gated Deep Sequence"),
+                "status": metrics.get("status", "fit"),
+                "val_balanced_auroc": metrics.get("val_auroc", np.nan),
+                "val_balanced_auprc": metrics.get("val_auprc", np.nan),
+                "val_gmean_threshold": np.nan,
+                "val_gmean": np.nan,
+                "test_auroc": metrics.get("test_auroc", np.nan),
+                "test_auroc_ci_low": np.nan,
+                "test_auroc_ci_high": np.nan,
+                "test_auprc": metrics.get("test_auprc", np.nan),
+                "test_optimal_f1": np.nan,
+                "test_optimal_f1_threshold": np.nan,
+                "test_precision_at_80_recall": np.nan,
+                "test_confusion_tn": np.nan,
+                "test_confusion_fp": np.nan,
+                "test_confusion_fn": np.nan,
+                "test_confusion_tp": np.nan,
+                "test_threshold_source": "direct probability ranking",
+                "train_windows": metrics.get("train_windows", np.nan),
+                "test_windows": metrics.get("test_windows", np.nan),
+                "test_positives": metrics.get("test_positives", np.nan),
+                "test_negatives": metrics.get("test_negatives", np.nan),
+                "active_window_mask_applied": metrics.get("active_window_mask_applied", np.nan),
+            }
+        ]
+    )
+
+
 def write_benchmark_summary(args: argparse.Namespace) -> pd.DataFrame:
     expected_test_windows = current_active_test_windows(args.tabular_data_dir)
     frames = [
@@ -210,6 +252,7 @@ def write_benchmark_summary(args: argparse.Namespace) -> pd.DataFrame:
         load_existing_sequence_metrics(args.real_world_dir, expected_test_windows),
         load_supervised_sequence_metrics(args.supervised_seq_dir, expected_test_windows),
         load_cgta_metrics(args.cgta_model_dir, expected_test_windows),
+        load_hybrid_cgta_metrics(args.hybrid_cgta_model_dir, expected_test_windows),
     ]
     frames = [df for df in frames if not df.empty]
     if not frames:
@@ -273,6 +316,10 @@ def write_comparison_plot(args: argparse.Namespace) -> None:
     cgta_path = args.cgta_report_dir / "predictions_cgta_net.npz"
     if cgta_path.exists():
         plot_classical_prediction_file(ax_roc, ax_pr, cgta_path, "CGTA-Net")
+
+    hybrid_path = args.hybrid_cgta_report_dir / "predictions_hybrid_cgta_net.npz"
+    if hybrid_path.exists():
+        plot_classical_prediction_file(ax_roc, ax_pr, hybrid_path, "Hybrid-CGTA Net")
 
     ax_roc.plot([0, 1], [0, 1], color="black", linestyle=":", lw=1)
     ax_roc.set_title("ROC Comparison")
@@ -375,6 +422,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--supervised-seq-report-dir", type=Path, default=SUPERVISED_SEQ_REPORT_DIR)
     parser.add_argument("--cgta-model-dir", type=Path, default=CGTA_MODEL_DIR)
     parser.add_argument("--cgta-report-dir", type=Path, default=CGTA_REPORT_DIR)
+    parser.add_argument("--hybrid-cgta-model-dir", type=Path, default=HYBRID_CGTA_MODEL_DIR)
+    parser.add_argument("--hybrid-cgta-report-dir", type=Path, default=HYBRID_CGTA_REPORT_DIR)
     parser.add_argument("--report-dir", type=Path, default=REPORT_DIR)
     parser.add_argument("--shap-sample-size", type=int, default=5000)
     return parser.parse_args()
