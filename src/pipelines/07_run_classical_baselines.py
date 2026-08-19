@@ -48,6 +48,7 @@ RANDOM_SEED = 42
 N_BOOTSTRAPS = int(os.getenv("N_BOOTSTRAPS", "1000"))
 MAX_OCSVM_TRAIN = int(os.getenv("MAX_OCSVM_TRAIN", "10000"))
 MAX_IFOREST_TRAIN = int(os.getenv("MAX_IFOREST_TRAIN", "100000"))
+TEMPORAL_ABLATION_PATTERNS = ("hour", "day_of_week", "is_night", "timestamp")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -90,6 +91,19 @@ def feature_matrix(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     for col in X.columns:
         X[col] = pd.to_numeric(X[col], errors="coerce")
     return X, list(X.columns)
+
+
+def drop_temporal_features(X: pd.DataFrame) -> pd.DataFrame:
+    temporal_cols = [
+        col for col in X.columns if any(pattern in col.lower() for pattern in TEMPORAL_ABLATION_PATTERNS)
+    ]
+    if temporal_cols:
+        logger.info(
+            "Circadian ablation dropping %s temporal columns: %s",
+            len(temporal_cols),
+            ", ".join(temporal_cols),
+        )
+    return X.drop(columns=temporal_cols)
 
 
 def balanced_indices(y: np.ndarray, seed: int = RANDOM_SEED) -> np.ndarray:
@@ -467,6 +481,16 @@ def main() -> None:
     X_test, _ = feature_matrix(test_df)
     if supervised_feature_names != feature_names:
         raise ValueError("Supervised and pure-healthy flattened feature columns do not match.")
+    X_train = drop_temporal_features(X_train)
+    X_train_supervised = drop_temporal_features(X_train_supervised)
+    X_val = drop_temporal_features(X_val)
+    X_test = drop_temporal_features(X_test)
+    feature_names = list(X_train.columns)
+    supervised_feature_names = list(X_train_supervised.columns)
+    if supervised_feature_names != feature_names:
+        raise ValueError("Supervised and pure-healthy feature columns do not match after circadian ablation.")
+    if list(X_val.columns) != feature_names or list(X_test.columns) != feature_names:
+        raise ValueError("Validation/test feature columns do not match training columns after circadian ablation.")
     val_bal_idx = balanced_indices(y_val)
 
     metrics_rows: list[dict[str, Any]] = []

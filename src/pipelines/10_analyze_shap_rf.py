@@ -26,6 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data" / "processed" / "anomaly_detection"
 REPORT_DIR = PROJECT_ROOT / "reports"
 RANDOM_SEED = 42
+TEMPORAL_ABLATION_PATTERNS = ("hour", "day_of_week", "is_night", "timestamp")
 
 
 def feature_matrix(df: pd.DataFrame) -> pd.DataFrame:
@@ -36,6 +37,15 @@ def feature_matrix(df: pd.DataFrame) -> pd.DataFrame:
     return X
 
 
+def drop_temporal_features(X: pd.DataFrame) -> pd.DataFrame:
+    temporal_cols = [
+        col for col in X.columns if any(pattern in col.lower() for pattern in TEMPORAL_ABLATION_PATTERNS)
+    ]
+    if temporal_cols:
+        print(f"Circadian ablation dropping {len(temporal_cols)} temporal columns: {', '.join(temporal_cols)}")
+    return X.drop(columns=temporal_cols)
+
+
 def load_supervised_train(data_dir: Path) -> tuple[pd.DataFrame, np.ndarray]:
     X_path = data_dir / "X_train_supervised_flat.parquet"
     y_path = data_dir / "y_train_supervised.npy"
@@ -43,7 +53,7 @@ def load_supervised_train(data_dir: Path) -> tuple[pd.DataFrame, np.ndarray]:
     y = np.load(y_path).astype(np.int8)
     if len(X) != len(y):
         raise ValueError(f"Supervised train length mismatch: X={len(X)}, y={len(y)}")
-    return X, y
+    return drop_temporal_features(X), y
 
 
 def load_test(data_dir: Path) -> tuple[pd.DataFrame, np.ndarray]:
@@ -55,7 +65,7 @@ def load_test(data_dir: Path) -> tuple[pd.DataFrame, np.ndarray]:
     y = np.load(y_path).astype(np.int8)
     if len(X) != len(y):
         raise ValueError(f"Test length mismatch: X={len(X)}, y={len(y)}")
-    return X, y
+    return drop_temporal_features(X), y
 
 
 def train_random_forest(X_train: pd.DataFrame, y_train: np.ndarray) -> Pipeline:
@@ -102,7 +112,7 @@ def calculate_operating_point(y_true: np.ndarray, scores: np.ndarray) -> dict[st
 
 
 def write_calibration_report(metrics: dict[str, float | int], output_path: Path) -> None:
-    text = f"""Random Forest Clinical Calibration
+    text = f"""Random Forest Clinical Calibration - Circadian Ablation
 
 Operating threshold: {metrics["threshold"]:.6f}
 Threshold criterion: Youden's J statistic

@@ -239,6 +239,13 @@ def write_shap_or_importance(args: argparse.Namespace) -> None:
         X_raw = X_raw.sample(args.shap_sample_size, random_state=42)
     imputer = model.named_steps["imputer"]
     xgb_model = model.named_steps["model"]
+    fitted_features = getattr(imputer, "feature_names_in_", None)
+    if fitted_features is not None:
+        missing = [feature for feature in fitted_features if feature not in X_raw.columns]
+        if missing:
+            logger.warning("Skipping SHAP: missing fitted features in X_test_flat.parquet: %s", missing)
+            return
+        X_raw = X_raw.loc[:, list(fitted_features)]
     X = imputer.transform(X_raw)
 
     try:
