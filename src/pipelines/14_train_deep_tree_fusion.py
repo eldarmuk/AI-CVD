@@ -119,15 +119,22 @@ def bootstrap_auc_ci(y_true: np.ndarray, scores: np.ndarray, n_bootstraps: int =
     return tuple(np.percentile(aucs, [2.5, 97.5]).tolist())
 
 
-def evaluate_scores(y_val: np.ndarray, val_scores: np.ndarray, y_test: np.ndarray, test_scores: np.ndarray) -> dict[str, Any]:
+def evaluate_scores(
+    y_val: np.ndarray,
+    val_scores: np.ndarray,
+    y_test: np.ndarray,
+    test_scores: np.ndarray,
+    model_name: str,
+    model_family: str,
+) -> dict[str, Any]:
     threshold, val_gmean = gmean_threshold(y_val, val_scores)
     y_pred = (test_scores >= threshold).astype(np.int8)
     cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
     f1, f1_threshold = optimal_f1(y_test, test_scores)
     ci_low, ci_high = bootstrap_auc_ci(y_test, test_scores)
     return {
-        "model": "CGTA-RF Fusion",
-        "model_family": "Deep-Tree Fusion",
+        "model": model_name,
+        "model_family": model_family,
         "status": "fit",
         "val_balanced_auroc": float(roc_auc_score(y_val, val_scores)),
         "val_balanced_auprc": float(average_precision_score(y_val, val_scores)),
@@ -158,7 +165,32 @@ def append_benchmark_row(metrics: dict[str, Any], report_dir: Path) -> None:
     else:
         summary = pd.DataFrame([metrics])
     summary.to_csv(summary_path, index=False)
-    logger.info("Appended CGTA-RF Fusion metrics to %s", summary_path)
+    logger.info("Appended %s metrics to %s", metrics["model"], summary_path)
+
+
+def make_random_forest_pipeline() -> Pipeline:
+    return Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="median")),
+            (
+                "model",
+                RandomForestClassifier(
+                    n_estimators=500,
+                    min_samples_leaf=5,
+                    class_weight="balanced_subsample",
+                    n_jobs=-1,
+                    random_state=RANDOM_SEED,
+                ),
+            ),
+        ]
+    )
+
+
+def embedding_only_frame(X: pd.DataFrame) -> pd.DataFrame:
+    embed_cols = [col for col in X.columns if col.startswith("cgta_embed_")]
+    if not embed_cols:
+        raise ValueError("No CGTA embedding columns found for embeddings-only ablation.")
+    return X.loc[:, embed_cols].copy()
 
 
 def write_fusion_shap(model: Pipeline, X_test: pd.DataFrame, output_path: Path, sample_size: int) -> None:
@@ -203,26 +235,19 @@ def main() -> None:
     args.fusion_report_dir.mkdir(parents=True, exist_ok=True)
 
     X_train, X_val, X_test, y_train, y_val, y_test = load_fusion_matrices(args.data_dir)
-    model = Pipeline(
-        [
-            ("imputer", SimpleImputer(strategy="median")),
-            (
-                "model",
-                RandomForestClassifier(
-                    n_estimators=500,
-                    min_samples_leaf=5,
-                    class_weight="balanced_subsample",
-                    n_jobs=-1,
-                    random_state=RANDOM_SEED,
-                ),
-            ),
-        ]
-    )
+    model = make_random_forest_pipeline()
     logger.info("Training CGTA-RF Fusion on X=%s with positives=%s.", X_train.shape, int(y_train.sum()))
     model.fit(X_train, y_train)
     val_scores = model.predict_proba(X_val)[:, 1]
     test_scores = model.predict_proba(X_test)[:, 1]
-    metrics = evaluate_scores(y_val, val_scores, y_test, test_scores)
+    metrics = evaluate_scores(
+        y_val,
+        val_scores,
+        y_test,
+        test_scores,
+        model_name="CGTA-RF Fusion",
+        model_family="Deep-Tree Fusion",
+    )
     metrics.update(
         {
             "train_windows": int(len(y_train)),
@@ -246,6 +271,54 @@ def main() -> None:
     append_benchmark_row(metrics, args.report_dir)
     write_fusion_shap(model, X_test, args.report_dir / "fusion_shap_beeswarm.png", args.shap_sample_size)
     logger.info("CGTA-RF Fusion Test AUROC=%.4f | Test AUPRC=%.4f", metrics["test_auroc"], metrics["test_auprc"])
+
+    X_train_embed = embedding_only_frame(X_train)
+    X_val_embed = embedding_only_frame(X_val)
+    X_test_embed = embedding_only_frame(X_test)
+    embedding_model = make_random_forest_pipeline()
+    logger.info(
+        "Training Embeddings-Only RF ablation on X=%s with positives=%s.",
+        X_train_embed.shape,
+        int(y_train.sum()),
+    )
+    embedding_model.fit(X_train_embed, y_train)
+    embed_val_scores = embedding_model.predict_proba(X_val_embed)[:, 1]
+    embed_test_scores = embedding_model.predict_proba(X_test_embed)[:, 1]
+    embed_metrics = evaluate_scores(
+        y_val,
+        embed_val_scores,
+        y_test,
+        embed_test_scores,
+        model_name="Embeddings-Only RF",
+        model_family="Deep Embedding Ablation",
+    )
+    embed_metrics.update(
+        {
+            "train_windows": int(len(y_train)),
+            "test_windows": int(len(y_test)),
+            "test_positives": int(y_test.sum()),
+            "test_negatives": int((y_test == 0).sum()),
+            "active_window_mask_applied": True,
+            "fusion_features": int(X_train_embed.shape[1]),
+            "tabular_features": 0,
+            "cgta_embedding_features": int(X_train_embed.shape[1]),
+        }
+    )
+    with open(args.model_dir / "cgta_rf_embeddings_only.pkl", "wb") as f:
+        pickle.dump(embedding_model, f)
+    with open(args.model_dir / "embeddings_only_metrics.json", "w", encoding="utf-8") as f:
+        json.dump(embed_metrics, f, indent=2)
+    np.savez_compressed(
+        args.fusion_report_dir / "predictions_embeddings_only_rf.npz",
+        y_test=y_test,
+        test_scores=embed_test_scores,
+    )
+    append_benchmark_row(embed_metrics, args.report_dir)
+    logger.info(
+        "Embeddings-Only RF Test AUROC=%.4f | Test AUPRC=%.4f",
+        embed_metrics["test_auroc"],
+        embed_metrics["test_auprc"],
+    )
 
 
 if __name__ == "__main__":
