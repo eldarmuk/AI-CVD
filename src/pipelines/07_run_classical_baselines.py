@@ -32,7 +32,6 @@ from sklearn.metrics import (
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import OneClassSVM
-from sklearn.utils.class_weight import compute_sample_weight
 
 try:
     from xgboost import XGBClassifier
@@ -247,30 +246,122 @@ def supervised_models() -> dict[str, Any]:
             ]
         ),
     }
-    if XGBClassifier is not None:
-        models["xgboost"] = Pipeline(
-            [
-                ("imputer", SimpleImputer(strategy="median")),
-                (
-                    "model",
-                    XGBClassifier(
-                        n_estimators=600,
-                        max_depth=4,
-                        learning_rate=0.03,
-                        subsample=0.85,
-                        colsample_bytree=0.85,
-                        objective="binary:logistic",
-                        eval_metric="aucpr",
-                        tree_method="hist",
-                        n_jobs=-1,
-                        random_state=RANDOM_SEED,
-                    ),
-                ),
-            ]
-        )
-    else:
-        logger.warning("xgboost is not installed; skipping XGBoost baseline.")
     return models
+
+
+def xgboost_param_grid(scale_pos_weight: float) -> list[dict[str, Any]]:
+    if XGBClassifier is None:
+        logger.warning("xgboost is not installed; skipping XGBoost baseline.")
+        return []
+
+    grid: list[dict[str, Any]] = []
+    for max_depth in [3, 4, 5]:
+        for learning_rate in [0.01, 0.03, 0.05]:
+            for subsample, colsample_bytree in [(0.7, 0.7), (0.8, 0.8)]:
+                grid.append(
+                    {
+                        "n_estimators": 800,
+                        "max_depth": max_depth,
+                        "learning_rate": learning_rate,
+                        "subsample": subsample,
+                        "colsample_bytree": colsample_bytree,
+                        "scale_pos_weight": scale_pos_weight,
+                        "min_child_weight": 2,
+                        "reg_lambda": 5.0,
+                        "reg_alpha": 0.1,
+                        "objective": "binary:logistic",
+                        "eval_metric": "aucpr",
+                        "tree_method": "hist",
+                        "n_jobs": -1,
+                        "random_state": RANDOM_SEED,
+                    }
+                )
+    return grid
+
+
+def build_xgboost_pipeline(params: dict[str, Any]) -> Pipeline:
+    if XGBClassifier is None:
+        raise RuntimeError("xgboost is not installed.")
+    return Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="median")),
+            ("model", XGBClassifier(**params)),
+        ]
+    )
+
+
+def fit_tuned_xgboost(
+    X_train: pd.DataFrame,
+    y_train: np.ndarray,
+    X_val_bal: pd.DataFrame,
+    y_val_bal: np.ndarray,
+    report_dir: Path,
+) -> tuple[Pipeline, dict[str, Any], pd.DataFrame]:
+    positives = int(np.sum(y_train == 1))
+    negatives = int(np.sum(y_train == 0))
+    if positives == 0 or negatives == 0:
+        raise ValueError("XGBoost tuning requires both positive and negative supervised train windows.")
+
+    scale_pos_weight = negatives / positives
+    tuning_rows: list[dict[str, Any]] = []
+    best_model: Pipeline | None = None
+    best_params: dict[str, Any] | None = None
+    best_score = -np.inf
+
+    logger.info(
+        "Tuning xgboost over shallow-tree grid with scale_pos_weight=%.4f (%s neg / %s pos).",
+        scale_pos_weight,
+        negatives,
+        positives,
+    )
+    for params in xgboost_param_grid(scale_pos_weight):
+        model = build_xgboost_pipeline(params)
+        model.fit(X_train, y_train)
+        val_scores = score_model(model, X_val_bal)
+        val_auprc = float(average_precision_score(y_val_bal, val_scores))
+        val_auroc = float(roc_auc_score(y_val_bal, val_scores))
+        row = {
+            **{
+                key: params[key]
+                for key in [
+                    "max_depth",
+                    "learning_rate",
+                    "subsample",
+                    "colsample_bytree",
+                    "scale_pos_weight",
+                    "min_child_weight",
+                    "reg_lambda",
+                    "reg_alpha",
+                    "n_estimators",
+                ]
+            },
+            "val_balanced_auprc": val_auprc,
+            "val_balanced_auroc": val_auroc,
+        }
+        tuning_rows.append(row)
+        if val_auprc > best_score:
+            best_score = val_auprc
+            best_params = params
+            best_model = model
+
+    if best_model is None or best_params is None:
+        raise RuntimeError("No XGBoost candidates were fit.")
+
+    tuning_df = pd.DataFrame(tuning_rows).sort_values(
+        ["val_balanced_auprc", "val_balanced_auroc"],
+        ascending=False,
+    )
+    tuning_df.to_csv(report_dir / "xgboost_tuning_results.csv", index=False)
+    logger.info(
+        "Selected xgboost params: max_depth=%s, learning_rate=%s, subsample=%s, "
+        "colsample_bytree=%s, val_balanced_auprc=%.4f",
+        best_params["max_depth"],
+        best_params["learning_rate"],
+        best_params["subsample"],
+        best_params["colsample_bytree"],
+        best_score,
+    )
+    return best_model, best_params, tuning_df
 
 
 def anomaly_models() -> dict[str, Any]:
@@ -391,14 +482,14 @@ def main() -> None:
             "Proceeding with healthy-only anomaly detectors.",
             supervised_classes.tolist(),
         )
-        metrics_rows.extend(skipped_supervised_row(name, y_train_supervised, reason) for name in supervised_models())
+        skipped_names = list(supervised_models())
+        if XGBClassifier is not None:
+            skipped_names.append("xgboost")
+        metrics_rows.extend(skipped_supervised_row(name, y_train_supervised, reason) for name in skipped_names)
     else:
         for name, model in supervised_models().items():
             logger.info("Training %s on mixed supervised cohort (%s windows)", name, len(X_train_supervised))
-            fit_kwargs: dict[str, Any] = {}
-            if name == "xgboost":
-                fit_kwargs["model__sample_weight"] = compute_sample_weight("balanced", y_train_supervised)
-            model.fit(X_train_supervised, y_train_supervised, **fit_kwargs)
+            model.fit(X_train_supervised, y_train_supervised)
             val_scores = score_model(model, X_val)
             test_scores = score_model(model, X_test)
             row = evaluate_scores(name, y_val[val_bal_idx], val_scores[val_bal_idx], y_test, test_scores)
@@ -415,8 +506,41 @@ def main() -> None:
                 test_scores=test_scores,
             )
             save_pickle(args.model_dir / f"{name}.pkl", model)
-            if name == "xgboost":
-                write_xgb_importance(model, feature_names, args.report_dir)
+
+        if XGBClassifier is not None:
+            name = "xgboost"
+            logger.info("Training %s on mixed supervised cohort (%s windows)", name, len(X_train_supervised))
+            model, best_params, tuning_df = fit_tuned_xgboost(
+                X_train_supervised,
+                y_train_supervised,
+                X_val.iloc[val_bal_idx],
+                y_val[val_bal_idx],
+                args.report_dir,
+            )
+            val_scores = score_model(model, X_val)
+            test_scores = score_model(model, X_test)
+            row = evaluate_scores(name, y_val[val_bal_idx], val_scores[val_bal_idx], y_test, test_scores)
+            row["status"] = "fit"
+            row["model_family"] = "Tree Ensemble"
+            row["train_windows"] = int(len(X_train_supervised))
+            row["train_source"] = "mixed supervised few-shot cohort"
+            row["xgboost_best_params"] = json.dumps(best_params, sort_keys=True)
+            row["xgboost_best_val_balanced_auprc"] = float(tuning_df.iloc[0]["val_balanced_auprc"])
+            row["xgboost_best_val_balanced_auroc"] = float(tuning_df.iloc[0]["val_balanced_auroc"])
+            metrics_rows.append(row)
+            np.savez_compressed(
+                args.report_dir / f"predictions_{name}.npz",
+                y_val_balanced=y_val[val_bal_idx],
+                val_balanced_scores=val_scores[val_bal_idx],
+                y_test=y_test,
+                test_scores=test_scores,
+            )
+            save_pickle(args.model_dir / f"{name}.pkl", model)
+            write_xgb_importance(model, feature_names, args.report_dir)
+        else:
+            metrics_rows.append(
+                skipped_supervised_row("xgboost", y_train_supervised, "xgboost is not installed.")
+            )
 
     healthy_train = sample_rows(X_train, train_pure_mask, MAX_IFOREST_TRAIN, RANDOM_SEED)
     for name, model in anomaly_models().items():
