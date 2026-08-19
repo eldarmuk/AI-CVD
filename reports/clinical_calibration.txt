@@ -1,0 +1,15 @@
+Random Forest Clinical Calibration - Circadian Ablation
+
+Operating threshold: 0.409575
+Threshold criterion: Youden's J statistic
+
+Precision (Positive Predictive Value): 0.6184
+Recall (Sensitivity): 0.9216
+Specificity: 0.3095
+False Positive Rate (Alarm Fatigue): 0.6905
+
+Confusion Matrix:
+  TP: 47
+  FP: 29
+  TN: 13
+  FN: 4

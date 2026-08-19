@@ -1,5 +1,6 @@
 pandas
 polars
+duckdb
 openpyxl
 fastparquet
 sqlalchemy

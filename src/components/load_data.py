@@ -13,7 +13,8 @@ from src.components.database import initialize_database, normalize_from_sources,
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-RAW_DATA_PATH = Path(__file__).parent.parent / "data" / "raw" / "HRP_new"
+OLD_DATA_PATH = Path(__file__).parent.parent.parent / "data" / "raw" / "HRP_old"
+NEW_DATA_PATH = Path(__file__).parent.parent.parent / "data" / "raw" / "2026-02-08"
 
 
 def _load_single_measurement_file(excel_path: Path) -> pd.DataFrame:
@@ -57,21 +58,23 @@ def _load_single_measurement_file(excel_path: Path) -> pd.DataFrame:
     return pd.concat(all_measurements, ignore_index=True)
 
 
-def load_measurements_data(excel_path: Path | List[Path]) -> pd.DataFrame:
-    """Load measurement data from one or many Excel files and normalize."""
-    paths: List[Path] = [excel_path] if isinstance(excel_path, Path) else list(excel_path)
+def load_measurements_data(excel_paths: List[Path]) -> pd.DataFrame:
+    """Load measurement data from many Excel files and normalize."""
     frames = []
-    for path in paths:
+    for path in excel_paths:
         frames.append(_load_single_measurement_file(path))
     df_all = pd.concat(frames, ignore_index=True)
     logger.info(f"Total measurements loaded across files: {len(df_all)}")
     return df_all
 
 
-def load_seniors_demographics(excel_path: Path) -> pd.DataFrame:
-    """Load seniors demographics (gender, birthdate, age)."""
-    logger.info(f"Loading seniors demographics from {excel_path}")
-    df = pd.read_excel(excel_path, engine="openpyxl")
+def load_seniors_demographics(excel_paths: List[Path]) -> pd.DataFrame:
+    """Load, combine, and deduplicate seniors demographics."""
+    logger.info(f"Loading seniors demographics from {len(excel_paths)} files")
+    
+    dfs = [pd.read_excel(p, engine="openpyxl") for p in excel_paths]
+    df = pd.concat(dfs, ignore_index=True)
+    
     df = df.rename(columns={
         "seniorID": "senior_id",
         "gender": "gender",
@@ -86,8 +89,10 @@ def load_seniors_demographics(excel_path: Path) -> pd.DataFrame:
     if "birthdate" in df.columns:
         df["birthdate"] = pd.to_datetime(df["birthdate"], errors="coerce").dt.date
 
-    df = df.dropna(subset=["senior_id"])
-    logger.info(f"Loaded {len(df)} senior demographic rows")
+    df = df.dropna(subset=["senior_id"]) 
+    df = df.drop_duplicates(subset=["senior_id"], keep='last').reset_index(drop=True)
+    
+    logger.info(f"Loaded {len(df)} unique senior demographic rows")
     return df[["senior_id", "gender", "birthdate", "age"]]
 
 
@@ -114,55 +119,55 @@ def insert_seniors_demographics(df: pd.DataFrame, conn: sqlite3.Connection):
     logger.info(f"Upserted {len(df)} seniors with demographics")
 
 
-def load_medical_info(excel_path: Path) -> pd.DataFrame:
-    """Load medical information (diseases and medicines)."""
-    logger.info(f"Loading medical info from {excel_path}")
-    df = pd.read_excel(excel_path, engine="openpyxl")
+def load_medical_info(excel_paths: List[Path]) -> pd.DataFrame:
+    """Load, combine, and deduplicate medical information."""
+    logger.info(f"Loading medical info from {len(excel_paths)} files")
     
-    # Rename columns to match database schema
+    dfs = [pd.read_excel(p, engine="openpyxl") for p in excel_paths]
+    df = pd.concat(dfs, ignore_index=True)
+    
     df = df.rename(columns={
         'seniorID': 'senior_id',
         'diseaseNames': 'disease_names',
         'medicineNames': 'medicine_names'
     })
     
-    # Handle duplicates: keep last entry for each senior_id
-    if df['senior_id'].duplicated().any():
-        duplicate_count = df['senior_id'].duplicated().sum()
+    duplicate_count = df['senior_id'].duplicated().sum()
+    if duplicate_count > 0:
         logger.warning(f"  Found {duplicate_count} duplicate senior_ids - keeping last entry for each")
-        df = df.drop_duplicates(subset=['senior_id'], keep='last')
+        df = df.drop_duplicates(subset=['senior_id'], keep='last').reset_index(drop=True)
     
-    logger.info(f"  Loaded {len(df)} records")
+    logger.info(f"  Loaded {len(df)} unique medical records")
     return df
 
 
-def load_alerts(excel_path: Path) -> pd.DataFrame:
-    """Load SOS alerts data."""
-    logger.info(f"Loading alerts from {excel_path}")
-    df = pd.read_excel(excel_path, engine="openpyxl")
+def load_alerts(excel_paths: List[Path]) -> pd.DataFrame:
+    """Load, combine, and deduplicate SOS alerts data."""
+    logger.info(f"Loading alerts from {len(excel_paths)} files")
     
-    # Rename columns to match database schema
+    dfs = [pd.read_excel(p, engine="openpyxl") for p in excel_paths]
+    df = pd.concat(dfs, ignore_index=True)
+    
     df = df.rename(columns={
         'seniorID': 'senior_id',
         'alertDate': 'alert_date',
         'sosNote': 'sos_note'
     })
     
-    logger.info(f"  Loaded {len(df)} records")
+    df = df.drop_duplicates().reset_index(drop=True)
+    
+    logger.info(f"  Loaded {len(df)} unique alert records")
     return df
 
 
 def insert_measurements(df: pd.DataFrame, conn: sqlite3.Connection, batch_size: int = 50000):
     """Insert measurements into database with batch processing."""
     logger.info(f"Inserting {len(df)} measurements...")
-    
-    # Insert measurements in batches
     for i in range(0, len(df), batch_size):
         batch = df.iloc[i:i+batch_size]
         batch.to_sql("measurements", conn, if_exists="append", index=False)
         if (i // batch_size + 1) % 10 == 0:
             logger.info(f"    Inserted {i + batch_size:,} measurements...")
-    
     conn.commit()
     logger.info("✓ Measurements inserted successfully")
 
@@ -174,11 +179,7 @@ def insert_measurements_from_excel(
     sheet_filters: Optional[List[str]] = None,
     resume: bool = True,
 ) -> None:
-    """Stream measurements from one or more Excel files directly into SQLite.
-
-    Processes each worksheet in read-only streaming mode to avoid loading the
-    entire dataset into memory. Commits in batches for resilience and speed.
-    """
+    """Stream measurements from one or more Excel files directly into SQLite."""
     total_inserted = 0
     cur = conn.cursor()
     for excel_path in excel_paths:
@@ -192,7 +193,7 @@ def insert_measurements_from_excel(
                 if sheet_filters and sheet_name not in sheet_filters:
                     continue
                 source_key = f"measurements::{excel_path.name}::{sheet_name}"
-                # Skip if already done (only when resume is enabled)
+                
                 if resume:
                     try:
                         row = cur.execute(
@@ -203,13 +204,9 @@ def insert_measurements_from_excel(
                             logger.info(f"✓ Skipping already processed sheet '{sheet_name}'")
                             continue
                     except sqlite3.OperationalError:
-                        # ingestion_state may not exist on very old DBs
                         pass
 
-                # TODO: Validate header structure
-                # header = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1, values_only=False))]
                 _ = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1, values_only=False))]
-                # Expect first 6 columns: seniorID, value, sbp, dbp, date, type
                 rows_buffer: list[dict] = []
                 processed = 0
 
@@ -225,16 +222,13 @@ def insert_measurements_from_excel(
                     rows_buffer.append(rec)
                     if len(rows_buffer) >= batch_rows:
                         df = pd.DataFrame.from_records(rows_buffer, columns=["senior_id","value","sbp","dbp","date","type"])
-                        # Type conversions and cleanup
                         df["senior_id"] = pd.to_numeric(df["senior_id"], errors="coerce")
                         df["value"] = pd.to_numeric(df["value"], errors="coerce")
                         df["sbp"] = pd.to_numeric(df["sbp"], errors="coerce")
                         df["dbp"] = pd.to_numeric(df["dbp"], errors="coerce")
                         df["type"] = df["type"].astype(str).str.strip()
                         df = df.dropna(subset=["senior_id"]).reset_index(drop=True)
-                        # Ensure seniors exist to satisfy FK
                         bulk_upsert_seniors(conn, df["senior_id"].dropna().unique())
-                        # Append to DB
                         df.to_sql("measurements", conn, if_exists="append", index=False)
                         conn.commit()
                         inserted = len(df)
@@ -242,7 +236,6 @@ def insert_measurements_from_excel(
                         processed += len(rows_buffer)
                         logger.info(f"  {sheet_name}: +{inserted:,} (total {total_inserted:,})")
                         rows_buffer.clear()
-                        # Update ingestion_state as in-progress
                         try:
                             cur.execute(
                                 "INSERT INTO ingestion_state(source, status, rows_processed) VALUES(?, 'in-progress', ?)\n"
@@ -281,7 +274,6 @@ def insert_measurements_from_excel(
                         pass
 
                 logger.info(f"✓ Finished sheet '{sheet_name}'")
-                # Mark as done
                 try:
                     cur.execute(
                         "INSERT INTO ingestion_state(source, status, rows_processed) VALUES(?, 'done', ?)\n"
@@ -313,27 +305,46 @@ def insert_alerts(df: pd.DataFrame, conn: sqlite3.Connection):
 
 
 def load_all_data(
-    data_dir: Path = RAW_DATA_PATH,
     fresh_start: bool = False,
     streaming: bool = True,
     batch_rows: int = 100_000,
-    resume: bool = True,
+    resume: bool = False,
 ):
-    """
-    Main pipeline: Load all data from Excel files into SQLite.
+    """Main pipeline: Load all combined old and new data into SQLite."""
     
-    Args:
-        data_dir: Directory containing the Excel files
-        fresh_start: If True, delete existing database and start fresh
-    """
     measurement_files = [
-        data_dir / "data_202512221122-01-09.xlsx",
-        data_dir / "data_202512221231-16-23.xlsx",
-        data_dir / "data_202512221344-24-30.xlsx",
+        # Old 30-day data (Nov)
+        OLD_DATA_PATH / "data_202512221122-01-09.xlsx",
+        OLD_DATA_PATH / "data_202511181045.xlsx",
+        OLD_DATA_PATH / "data_202512221231-16-23.xlsx",
+        OLD_DATA_PATH / "data_202512221344-24-30.xlsx",
+        
+        # New 60-day data (Dec - Jan)
+        NEW_DATA_PATH / "data-2025-12-01-07_202602091218.xlsx",
+        NEW_DATA_PATH / "data-2025-12-08-14_202602091252.xlsx",
+        NEW_DATA_PATH / "data-2025-12-15-21_202602091330.xlsx",
+        NEW_DATA_PATH / "data-2025-12-22-28_202602091430.xlsx",
+        NEW_DATA_PATH / "data-2025-12-29-2026-01-04_202602091614.xlsx",
+        NEW_DATA_PATH / "data-2026-01-05-11-_202602092056.xlsx",
+        NEW_DATA_PATH / "data-2026-01-12-18_202602100141.xlsx",
+        NEW_DATA_PATH / "data-2026-01-19-25_202602100226.xlsx",
+        NEW_DATA_PATH / "data-2026-01-26-31-.xlsx",
     ]
-    medical_file = data_dir / "Med&Diseases_202512221410.xlsx"
-    alerts_file = data_dir / "SOS_202512221411.xlsx"
-    seniors_demo_file = data_dir / "SeniorGenderAge_202512221409.xlsx"
+    
+    medical_files = [
+        OLD_DATA_PATH / "Med&Diseases_202512221410.xlsx",
+        NEW_DATA_PATH / "Med&Diseases_202602082215.xlsx"
+    ]
+    
+    alerts_files = [
+        OLD_DATA_PATH / "SOS_202512221411.xlsx",
+        NEW_DATA_PATH / "SOS_202602082216.xlsx"
+    ]
+    
+    seniors_demo_files = [
+        OLD_DATA_PATH / "SeniorGenderAge_202512221409.xlsx",
+        NEW_DATA_PATH / "SeniorGenderAge_202602082214.xlsx"
+    ]
 
     db_path = Path(__file__).parent.parent.parent / "db" / "hrp_data.db"
     if fresh_start and db_path.exists():
@@ -343,43 +354,41 @@ def load_all_data(
     conn = initialize_database(db_path)
     
     try:
-        # Load seniors demographics first (to satisfy FK during measurements insert)
-        if seniors_demo_file.exists():
-            seniors_df = load_seniors_demographics(seniors_demo_file)
-            insert_seniors_demographics(seniors_df, conn)
-        else:
-            logger.warning(f"Seniors demographic file not found: {seniors_demo_file}")
+        for seniors_demo_file in seniors_demo_files:
+            if seniors_demo_file.exists():
+                seniors_df = load_seniors_demographics([seniors_demo_file])
+                insert_seniors_demographics(seniors_df, conn)
+            else:
+                logger.warning(f"Seniors demographic file not found: {seniors_demo_file}")
 
-        # Load measurements (largest dataset)
         if streaming:
             insert_measurements_from_excel(measurement_files, conn, batch_rows=batch_rows, resume=resume)
         else:
             measurements = load_measurements_data(measurement_files)
-            # Ensure seniors exist for FK before insert
             bulk_upsert_seniors(conn, measurements["senior_id"].dropna().unique())
             insert_measurements(measurements, conn)
         
         # Load medical info
-        medical_info = load_medical_info(medical_file)
+        medical_info = load_medical_info(medical_files)
         insert_medical_info(medical_info, conn)
         
         # Load alerts
-        alerts = load_alerts(alerts_file)
+        alerts = load_alerts(alerts_files)
         insert_alerts(alerts, conn)
         
-        # Normalize and sync derived tables from raw imports
+        # Normalize and sync derived tables
         normalize_from_sources(conn)
         
         logger.info("\n✓✓✓ All data loaded and normalized successfully! ✓✓✓")
         
         # Print summary statistics
-        print_summary_stats(conn)
+        print_summary_stats(conn, db_path)
         
     finally:
         conn.close()
 
 
-def print_summary_stats(conn: sqlite3.Connection):
+def print_summary_stats(conn: sqlite3.Connection, db_path: Path):
     """Print database summary statistics."""
     cursor = conn.cursor()
     
@@ -409,4 +418,4 @@ def print_summary_stats(conn: sqlite3.Connection):
 
 
 if __name__ == "__main__":
-    load_all_data(fresh_start=True)
+    load_all_data(fresh_start=True, streaming=True, batch_rows=100_000, resume=False)
