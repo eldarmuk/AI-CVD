@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import sys
+import warnings
 from pathlib import Path
 from typing import Iterable
 
@@ -152,11 +153,31 @@ def iter_senior_frames(
             yield df_senior.reset_index(drop=True)
 
 
+def nan_column_stat(window: np.ndarray, stat: str) -> np.ndarray:
+    """Column-wise NaN-aware reducer that leaves all-missing columns as NaN without warnings."""
+    reducers = {
+        "mean": np.nanmean,
+        "std": np.nanstd,
+        "min": np.nanmin,
+        "max": np.nanmax,
+        "median": np.nanmedian,
+    }
+    if stat not in reducers:
+        raise ValueError(f"Unsupported stat: {stat}")
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
+        warnings.filterwarnings("ignore", message="All-NaN slice encountered", category=RuntimeWarning)
+        warnings.filterwarnings("ignore", message="Degrees of freedom <= 0 for slice.", category=RuntimeWarning)
+        return reducers[stat](window, axis=0)
+
+
 def nan_skew(window: np.ndarray) -> np.ndarray:
-    mean = np.nanmean(window, axis=0)
-    centered = window - mean
-    second = np.nanmean(centered ** 2, axis=0)
-    third = np.nanmean(centered ** 3, axis=0)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
+        mean = np.nanmean(window, axis=0)
+        centered = window - mean
+        second = np.nanmean(centered ** 2, axis=0)
+        third = np.nanmean(centered ** 3, axis=0)
     denom = np.power(second, 1.5)
     return np.divide(third, denom, out=np.zeros_like(third), where=denom > 1e-12)
 
@@ -177,11 +198,11 @@ def summarize_window(
     if physiology_cols:
         values = window[physiology_cols].to_numpy(dtype=np.float32, copy=True)
         stats = {
-            "mean": np.nanmean(values, axis=0),
-            "std": np.nanstd(values, axis=0),
-            "min": np.nanmin(values, axis=0),
-            "max": np.nanmax(values, axis=0),
-            "median": np.nanmedian(values, axis=0),
+            "mean": nan_column_stat(values, "mean"),
+            "std": nan_column_stat(values, "std"),
+            "min": nan_column_stat(values, "min"),
+            "max": nan_column_stat(values, "max"),
+            "median": nan_column_stat(values, "median"),
             "skew": nan_skew(values),
             "last_value": values[-1],
             "delta": values[-1] - values[0],
@@ -193,8 +214,8 @@ def summarize_window(
     if sparsity_cols:
         gaps = window[sparsity_cols].to_numpy(dtype=np.float32, copy=True)
         stats = {
-            "max_gap": np.nanmax(gaps, axis=0),
-            "mean_gap": np.nanmean(gaps, axis=0),
+            "max_gap": nan_column_stat(gaps, "max"),
+            "mean_gap": nan_column_stat(gaps, "mean"),
             "final_staleness": gaps[-1],
         }
         for stat_name, stat_values in stats.items():
