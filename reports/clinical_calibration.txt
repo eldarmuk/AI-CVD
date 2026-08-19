@@ -1,0 +1,15 @@
+Random Forest Clinical Calibration
+
+Operating threshold: 0.565931
+Threshold criterion: Youden's J statistic
+
+Precision (Positive Predictive Value): 0.8085
+Recall (Sensitivity): 0.7451
+Specificity: 0.7857
+False Positive Rate (Alarm Fatigue): 0.2143
+
+Confusion Matrix:
+  TP: 38
+  FP: 9
+  TN: 33
+  FN: 13
