@@ -1,0 +1,19 @@
+{
+  "model": "Supervised Sequence Net",
+  "model_family": "Supervised Deep Sequence",
+  "status": "fit",
+  "best_epoch": 68,
+  "best_val_auprc": 0.6454959744234505,
+  "val_auroc": 0.5860745614035088,
+  "val_auprc": 0.6454959744234505,
+  "test_auroc": 0.5549857549857549,
+  "test_auprc": 0.6088304781600788,
+  "train_windows": 87,
+  "val_windows": 86,
+  "test_windows": 84,
+  "test_positives": 45,
+  "test_negatives": 39,
+  "active_window_mask_applied": true,
+  "prediction_window": "4 hours",
+  "cohort": "elite"
+}

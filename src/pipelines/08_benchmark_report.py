@@ -29,6 +29,8 @@ CLASSICAL_REPORT_DIR = PROJECT_ROOT / "reports" / "classical_baselines"
 CLASSICAL_MODEL_DIR = PROJECT_ROOT / "models" / "classical_baselines"
 TABULAR_DATA_DIR = PROJECT_ROOT / "data" / "processed" / "anomaly_detection"
 REAL_WORLD_DIR = PROJECT_ROOT / "models" / "real_world_auprc"
+SUPERVISED_SEQ_DIR = PROJECT_ROOT / "models" / "supervised_seq"
+SUPERVISED_SEQ_REPORT_DIR = PROJECT_ROOT / "reports" / "supervised_seq"
 REPORT_DIR = PROJECT_ROOT / "reports"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -94,8 +96,49 @@ def load_existing_sequence_metrics(real_world_dir: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def load_supervised_sequence_metrics(supervised_seq_dir: Path) -> pd.DataFrame:
+    path = supervised_seq_dir / "metrics.json"
+    if not path.exists():
+        return pd.DataFrame()
+    metrics = read_json(path)
+    return pd.DataFrame(
+        [
+            {
+                "model": "Supervised Sequence Net",
+                "model_family": "Supervised Deep Sequence",
+                "status": metrics.get("status", "fit"),
+                "val_balanced_auroc": metrics.get("val_auroc", np.nan),
+                "val_balanced_auprc": metrics.get("val_auprc", np.nan),
+                "val_gmean_threshold": np.nan,
+                "val_gmean": np.nan,
+                "test_auroc": metrics.get("test_auroc", np.nan),
+                "test_auroc_ci_low": np.nan,
+                "test_auroc_ci_high": np.nan,
+                "test_auprc": metrics.get("test_auprc", np.nan),
+                "test_optimal_f1": np.nan,
+                "test_optimal_f1_threshold": np.nan,
+                "test_precision_at_80_recall": np.nan,
+                "test_confusion_tn": np.nan,
+                "test_confusion_fp": np.nan,
+                "test_confusion_fn": np.nan,
+                "test_confusion_tp": np.nan,
+                "test_threshold_source": "direct probability ranking",
+                "train_windows": metrics.get("train_windows", np.nan),
+                "test_windows": metrics.get("test_windows", np.nan),
+                "test_positives": metrics.get("test_positives", np.nan),
+                "test_negatives": metrics.get("test_negatives", np.nan),
+                "active_window_mask_applied": metrics.get("active_window_mask_applied", np.nan),
+            }
+        ]
+    )
+
+
 def write_benchmark_summary(args: argparse.Namespace) -> pd.DataFrame:
-    frames = [load_classical_summary(args.classical_report_dir), load_existing_sequence_metrics(args.real_world_dir)]
+    frames = [
+        load_classical_summary(args.classical_report_dir),
+        load_existing_sequence_metrics(args.real_world_dir),
+        load_supervised_sequence_metrics(args.supervised_seq_dir),
+    ]
     frames = [df for df in frames if not df.empty]
     if not frames:
         raise FileNotFoundError("No benchmark metric artifacts found to summarize.")
@@ -146,6 +189,10 @@ def write_comparison_plot(args: argparse.Namespace) -> None:
     for label, path in sequence_files.items():
         if path.exists():
             plot_sequence_prediction_file(ax_pr, path, label)
+
+    supervised_seq_path = args.supervised_seq_report_dir / "predictions_supervised_sequence_net.npz"
+    if supervised_seq_path.exists():
+        plot_classical_prediction_file(ax_roc, ax_pr, supervised_seq_path, "Supervised Sequence Net")
 
     ax_roc.plot([0, 1], [0, 1], color="black", linestyle=":", lw=1)
     ax_roc.set_title("ROC Comparison")
@@ -237,6 +284,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--classical-model-dir", type=Path, default=CLASSICAL_MODEL_DIR)
     parser.add_argument("--tabular-data-dir", type=Path, default=TABULAR_DATA_DIR)
     parser.add_argument("--real-world-dir", type=Path, default=REAL_WORLD_DIR)
+    parser.add_argument("--supervised-seq-dir", type=Path, default=SUPERVISED_SEQ_DIR)
+    parser.add_argument("--supervised-seq-report-dir", type=Path, default=SUPERVISED_SEQ_REPORT_DIR)
     parser.add_argument("--report-dir", type=Path, default=REPORT_DIR)
     parser.add_argument("--shap-sample-size", type=int, default=5000)
     return parser.parse_args()
