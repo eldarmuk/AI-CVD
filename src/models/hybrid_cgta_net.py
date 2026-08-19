@@ -21,7 +21,7 @@ class HybridCGTANet(nn.Module):
         sequence_embedding_dim: int = 64,
         tabular_embedding_dim: int = 64,
         num_layers: int = 1,
-        dropout: float = 0.25,
+        dropout: float = 0.4,
     ) -> None:
         super().__init__()
         if tabular_dim <= 0:
@@ -44,22 +44,23 @@ class HybridCGTANet(nn.Module):
         )
         self.tabular_branch = nn.Sequential(
             nn.Linear(tabular_dim, 128),
-            nn.LayerNorm(128),
-            nn.GELU(),
-            nn.Dropout(dropout),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Dropout(0.4),
             nn.Linear(128, tabular_embedding_dim),
-            nn.LayerNorm(tabular_embedding_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
+            nn.BatchNorm1d(tabular_embedding_dim),
+            nn.ReLU(),
+            nn.Dropout(0.4),
         )
         self.classifier = nn.Sequential(
             nn.Linear(sequence_embedding_dim + tabular_embedding_dim, 96),
-            nn.LayerNorm(96),
-            nn.GELU(),
-            nn.Dropout(dropout),
+            nn.BatchNorm1d(96),
+            nn.ReLU(),
+            nn.Dropout(0.4),
             nn.Linear(96, 32),
-            nn.GELU(),
-            nn.Dropout(dropout),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.Dropout(0.4),
             nn.Linear(32, 1),
             nn.Sigmoid(),
         )

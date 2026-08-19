@@ -13,6 +13,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset
 
 from src.models.hybrid_cgta_net import HybridCGTANet
@@ -134,7 +135,7 @@ def normalize_tabular(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
     test_df: pd.DataFrame,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], dict[str, list[float]]]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], dict[str, Any]]:
     columns = list(train_df.columns)
     val_df = val_df.reindex(columns=columns)
     test_df = test_df.reindex(columns=columns)
@@ -148,15 +149,23 @@ def normalize_tabular(
     val_values = np.where(np.isnan(val_values), fill.reshape(1, -1), val_values)
     test_values = np.where(np.isnan(test_values), fill.reshape(1, -1), test_values)
 
-    mean = train_values.mean(axis=0)
-    std = train_values.std(axis=0)
-    std = np.where(std < 1e-6, 1.0, std)
+    scaler = StandardScaler()
+    train_scaled = scaler.fit_transform(train_values)
+    val_scaled = scaler.transform(val_values)
+    test_scaled = scaler.transform(test_values)
     return (
-        ((train_values - mean) / std).astype(np.float32),
-        ((val_values - mean) / std).astype(np.float32),
-        ((test_values - mean) / std).astype(np.float32),
+        train_scaled.astype(np.float32),
+        val_scaled.astype(np.float32),
+        test_scaled.astype(np.float32),
         columns,
-        {"median": fill.tolist(), "mean": mean.tolist(), "std": std.tolist()},
+        {
+            "scaler": "sklearn.preprocessing.StandardScaler",
+            "fit_scope": "train supervised tabular rows only",
+            "median_imputation": fill.tolist(),
+            "mean": scaler.mean_.tolist(),
+            "scale": scaler.scale_.tolist(),
+            "var": scaler.var_.tolist(),
+        },
     )
 
 
@@ -456,9 +465,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sequence-embedding-dim", type=int, default=64)
     parser.add_argument("--tabular-embedding-dim", type=int, default=64)
     parser.add_argument("--num-layers", type=int, default=1)
-    parser.add_argument("--dropout", type=float, default=0.25)
+    parser.add_argument("--dropout", type=float, default=0.4)
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--weight-decay", type=float, default=1e-3)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--grad-clip", type=float, default=5.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--cpu", action="store_true")
