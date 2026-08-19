@@ -35,6 +35,8 @@ CGTA_MODEL_DIR = PROJECT_ROOT / "models" / "cgta_net"
 CGTA_REPORT_DIR = PROJECT_ROOT / "reports" / "cgta_net"
 HYBRID_CGTA_MODEL_DIR = PROJECT_ROOT / "models" / "hybrid_cgta"
 HYBRID_CGTA_REPORT_DIR = PROJECT_ROOT / "reports" / "hybrid_cgta"
+FUSION_MODEL_DIR = PROJECT_ROOT / "models" / "cgta_rf_fusion"
+FUSION_REPORT_DIR = PROJECT_ROOT / "reports" / "cgta_rf_fusion"
 REPORT_DIR = PROJECT_ROOT / "reports"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -245,6 +247,17 @@ def load_hybrid_cgta_metrics(hybrid_model_dir: Path, expected_test_windows: int 
     )
 
 
+def load_fusion_metrics(fusion_model_dir: Path, expected_test_windows: int | None = None) -> pd.DataFrame:
+    path = fusion_model_dir / "metrics.json"
+    if not path.exists():
+        return pd.DataFrame()
+    metrics = read_json(path)
+    if not metric_window_count_matches(metrics, expected_test_windows, "test_windows"):
+        logger.warning("Skipping stale %s because its test window count does not match the current split.", path)
+        return pd.DataFrame()
+    return pd.DataFrame([metrics])
+
+
 def write_benchmark_summary(args: argparse.Namespace) -> pd.DataFrame:
     expected_test_windows = current_active_test_windows(args.tabular_data_dir)
     frames = [
@@ -253,6 +266,7 @@ def write_benchmark_summary(args: argparse.Namespace) -> pd.DataFrame:
         load_supervised_sequence_metrics(args.supervised_seq_dir, expected_test_windows),
         load_cgta_metrics(args.cgta_model_dir, expected_test_windows),
         load_hybrid_cgta_metrics(args.hybrid_cgta_model_dir, expected_test_windows),
+        load_fusion_metrics(args.fusion_model_dir, expected_test_windows),
     ]
     frames = [df for df in frames if not df.empty]
     if not frames:
@@ -320,6 +334,10 @@ def write_comparison_plot(args: argparse.Namespace) -> None:
     hybrid_path = args.hybrid_cgta_report_dir / "predictions_hybrid_cgta_net.npz"
     if hybrid_path.exists():
         plot_classical_prediction_file(ax_roc, ax_pr, hybrid_path, "Hybrid-CGTA Net")
+
+    fusion_path = args.fusion_report_dir / "predictions_cgta_rf_fusion.npz"
+    if fusion_path.exists():
+        plot_classical_prediction_file(ax_roc, ax_pr, fusion_path, "CGTA-RF Fusion")
 
     ax_roc.plot([0, 1], [0, 1], color="black", linestyle=":", lw=1)
     ax_roc.set_title("ROC Comparison")
@@ -424,6 +442,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cgta-report-dir", type=Path, default=CGTA_REPORT_DIR)
     parser.add_argument("--hybrid-cgta-model-dir", type=Path, default=HYBRID_CGTA_MODEL_DIR)
     parser.add_argument("--hybrid-cgta-report-dir", type=Path, default=HYBRID_CGTA_REPORT_DIR)
+    parser.add_argument("--fusion-model-dir", type=Path, default=FUSION_MODEL_DIR)
+    parser.add_argument("--fusion-report-dir", type=Path, default=FUSION_REPORT_DIR)
     parser.add_argument("--report-dir", type=Path, default=REPORT_DIR)
     parser.add_argument("--shap-sample-size", type=int, default=5000)
     return parser.parse_args()

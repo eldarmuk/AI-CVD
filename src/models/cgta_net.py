@@ -69,14 +69,34 @@ class CGTANet(nn.Module):
         X_static: torch.Tensor,
         X_circadian: torch.Tensor,
     ) -> torch.Tensor:
+        return self.classifier_embedding(X_dynamic, X_static, X_circadian, include_score=True)
+
+    def temporal_context(
+        self,
+        X_dynamic: torch.Tensor,
+        X_static: torch.Tensor,
+        X_circadian: torch.Tensor,
+    ) -> torch.Tensor:
         sequence_states, _ = self.encoder(X_dynamic)
         gate = self.time_gate(X_circadian)
         gated_states = sequence_states * gate
         attention_input = torch.cat([gated_states, X_circadian], dim=-1)
         attention_weights = torch.softmax(self.attention_score(attention_input), dim=1)
         temporal_context = torch.sum(gated_states * attention_weights, dim=1)
-        features = torch.cat([temporal_context, X_static], dim=1)
-        return self.classifier(features).squeeze(1)
+        return torch.cat([temporal_context, X_static], dim=1)
+
+    def classifier_embedding(
+        self,
+        X_dynamic: torch.Tensor,
+        X_static: torch.Tensor,
+        X_circadian: torch.Tensor,
+        include_score: bool = False,
+    ) -> torch.Tensor:
+        features = self.temporal_context(X_dynamic, X_static, X_circadian)
+        embedding = self.classifier[:-2](features)
+        if include_score:
+            return self.classifier[-2:](embedding).squeeze(1)
+        return embedding
 
     def gate_values(self, X_circadian: torch.Tensor) -> torch.Tensor:
         """Return per-timestep gate activations for explainability."""

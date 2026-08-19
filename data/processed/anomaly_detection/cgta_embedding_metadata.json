@@ -1,0 +1,163 @@
+{
+  "source_checkpoint": "C:\\Users\\eldar\\Projects\\AI-CVD\\models\\cgta_net\\best_model.pt",
+  "checkpoint_best_epoch": 16,
+  "embedding_layer": "CGTANet.classifier[:-2]",
+  "splits": {
+    "train": {
+      "split": "train",
+      "path": "C:\\Users\\eldar\\Projects\\AI-CVD\\data\\processed\\anomaly_detection\\X_train_cgta_embed.npy",
+      "shape": [
+        979,
+        48
+      ],
+      "positives": 519,
+      "feature_groups": {
+        "dynamic": [
+          "temperature",
+          "heartrate",
+          "sbp",
+          "dbp",
+          "pulse_pressure",
+          "steps",
+          "saturation",
+          "hr_volatility",
+          "bp_trend",
+          "steps_rolling_sum_6h",
+          "time_since_last_temperature",
+          "time_since_last_heartrate",
+          "time_since_last_sbp",
+          "time_since_last_dbp",
+          "time_since_last_pulse_pressure",
+          "time_since_last_steps",
+          "time_since_last_saturation",
+          "shock_index",
+          "recent_event_burden"
+        ],
+        "static": [
+          "cardiovascular",
+          "metabolic_endocrine",
+          "neurological",
+          "psychiatric_cognitive",
+          "musculoskeletal",
+          "respiratory",
+          "gastro_renal_urologic",
+          "oncological",
+          "sensory",
+          "other_functional_risk",
+          "other",
+          "age",
+          "gender"
+        ],
+        "circadian": [
+          "hour_sin",
+          "hour_cos",
+          "is_night"
+        ]
+      }
+    },
+    "val": {
+      "split": "val",
+      "path": "C:\\Users\\eldar\\Projects\\AI-CVD\\data\\processed\\anomaly_detection\\X_val_cgta_embed.npy",
+      "shape": [
+        92,
+        48
+      ],
+      "positives": 48,
+      "feature_groups": {
+        "dynamic": [
+          "temperature",
+          "heartrate",
+          "sbp",
+          "dbp",
+          "pulse_pressure",
+          "steps",
+          "saturation",
+          "hr_volatility",
+          "bp_trend",
+          "steps_rolling_sum_6h",
+          "time_since_last_temperature",
+          "time_since_last_heartrate",
+          "time_since_last_sbp",
+          "time_since_last_dbp",
+          "time_since_last_pulse_pressure",
+          "time_since_last_steps",
+          "time_since_last_saturation",
+          "shock_index",
+          "recent_event_burden"
+        ],
+        "static": [
+          "cardiovascular",
+          "metabolic_endocrine",
+          "neurological",
+          "psychiatric_cognitive",
+          "musculoskeletal",
+          "respiratory",
+          "gastro_renal_urologic",
+          "oncological",
+          "sensory",
+          "other_functional_risk",
+          "other",
+          "age",
+          "gender"
+        ],
+        "circadian": [
+          "hour_sin",
+          "hour_cos",
+          "is_night"
+        ]
+      }
+    },
+    "test": {
+      "split": "test",
+      "path": "C:\\Users\\eldar\\Projects\\AI-CVD\\data\\processed\\anomaly_detection\\X_test_cgta_embed.npy",
+      "shape": [
+        93,
+        48
+      ],
+      "positives": 51,
+      "feature_groups": {
+        "dynamic": [
+          "temperature",
+          "heartrate",
+          "sbp",
+          "dbp",
+          "pulse_pressure",
+          "steps",
+          "saturation",
+          "hr_volatility",
+          "bp_trend",
+          "steps_rolling_sum_6h",
+          "time_since_last_temperature",
+          "time_since_last_heartrate",
+          "time_since_last_sbp",
+          "time_since_last_dbp",
+          "time_since_last_pulse_pressure",
+          "time_since_last_steps",
+          "time_since_last_saturation",
+          "shock_index",
+          "recent_event_burden"
+        ],
+        "static": [
+          "cardiovascular",
+          "metabolic_endocrine",
+          "neurological",
+          "psychiatric_cognitive",
+          "musculoskeletal",
+          "respiratory",
+          "gastro_renal_urologic",
+          "oncological",
+          "sensory",
+          "other_functional_risk",
+          "other",
+          "age",
+          "gender"
+        ],
+        "circadian": [
+          "hour_sin",
+          "hour_cos",
+          "is_night"
+        ]
+      }
+    }
+  }
+}
