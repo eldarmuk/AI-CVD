@@ -62,6 +62,21 @@ def load_split(data_dir: Path, split: str) -> tuple[pd.DataFrame, np.ndarray]:
     return X, y
 
 
+def load_supervised_train(data_dir: Path) -> tuple[pd.DataFrame, np.ndarray]:
+    X_path = data_dir / "X_train_supervised_flat.parquet"
+    y_path = data_dir / "y_train_supervised.npy"
+    if not X_path.exists() or not y_path.exists():
+        raise FileNotFoundError(
+            "Missing mixed supervised training artifacts. Run "
+            "python -m src.pipelines.06_flatten_tabular_features first."
+        )
+    X = pd.read_parquet(X_path)
+    y = np.load(y_path).astype(np.int8)
+    if len(X) != len(y):
+        raise ValueError(f"Supervised train length mismatch: X={len(X)} y={len(y)}")
+    return X, y
+
+
 def load_pure_mask(data_dir: Path, split: str, y: np.ndarray) -> np.ndarray:
     path = data_dir / f"{split}_pure_healthy_mask.npy"
     if path.exists():
@@ -308,16 +323,13 @@ def write_xgb_importance(model: Pipeline, feature_names: list[str], report_dir: 
     importance.to_csv(report_dir / "xgboost_feature_importance.csv", index=False)
 
 
-def skipped_supervised_row(model_name: str, y_train: np.ndarray) -> dict[str, Any]:
+def skipped_supervised_row(model_name: str, y_train: np.ndarray, reason: str) -> dict[str, Any]:
     classes, counts = np.unique(y_train, return_counts=True)
     return {
         "model": model_name,
         "model_family": "Supervised Classifier",
         "status": "skipped",
-        "skip_reason": (
-            "Supervised classifier requires at least two classes in y_train; "
-            "the curated anomaly-detection training split is pure healthy."
-        ),
+        "skip_reason": reason,
         "train_classes": json.dumps({str(cls): int(count) for cls, count in zip(classes, counts)}),
         "val_balanced_auroc": np.nan,
         "val_balanced_auprc": np.nan,
@@ -353,36 +365,47 @@ def main() -> None:
     args.model_dir.mkdir(parents=True, exist_ok=True)
 
     train_df, y_train = load_split(args.data_dir, "train")
+    train_supervised_df, y_train_supervised = load_supervised_train(args.data_dir)
     val_df, y_val = load_split(args.data_dir, "val")
     test_df, y_test = load_split(args.data_dir, "test")
     train_pure_mask = load_pure_mask(args.data_dir, "train", y_train)
 
     X_train, feature_names = feature_matrix(train_df)
+    X_train_supervised, supervised_feature_names = feature_matrix(train_supervised_df)
     X_val, _ = feature_matrix(val_df)
     X_test, _ = feature_matrix(test_df)
+    if supervised_feature_names != feature_names:
+        raise ValueError("Supervised and pure-healthy flattened feature columns do not match.")
     val_bal_idx = balanced_indices(y_val)
 
     metrics_rows: list[dict[str, Any]] = []
 
-    train_classes = np.unique(y_train)
-    if len(train_classes) < 2:
-        logger.warning(
-            "Skipping supervised baselines because y_train has one class only: %s. "
-            "Proceeding with healthy-only anomaly detectors.",
-            train_classes.tolist(),
+    supervised_classes = np.unique(y_train_supervised)
+    if len(supervised_classes) < 2:
+        reason = (
+            "Supervised classifier requires at least two classes in y_train_supervised; "
+            "the mixed supervised cohort is single-class."
         )
-        metrics_rows.extend(skipped_supervised_row(name, y_train) for name in supervised_models())
+        logger.warning(
+            "Skipping supervised baselines because y_train_supervised has one class only: %s. "
+            "Proceeding with healthy-only anomaly detectors.",
+            supervised_classes.tolist(),
+        )
+        metrics_rows.extend(skipped_supervised_row(name, y_train_supervised, reason) for name in supervised_models())
     else:
         for name, model in supervised_models().items():
-            logger.info("Training %s", name)
+            logger.info("Training %s on mixed supervised cohort (%s windows)", name, len(X_train_supervised))
             fit_kwargs: dict[str, Any] = {}
             if name == "xgboost":
-                fit_kwargs["model__sample_weight"] = compute_sample_weight("balanced", y_train)
-            model.fit(X_train, y_train, **fit_kwargs)
+                fit_kwargs["model__sample_weight"] = compute_sample_weight("balanced", y_train_supervised)
+            model.fit(X_train_supervised, y_train_supervised, **fit_kwargs)
             val_scores = score_model(model, X_val)
             test_scores = score_model(model, X_test)
             row = evaluate_scores(name, y_val[val_bal_idx], val_scores[val_bal_idx], y_test, test_scores)
             row["status"] = "fit"
+            row["model_family"] = "Tree Ensemble" if name in {"random_forest", "xgboost"} else "Regularized Linear"
+            row["train_windows"] = int(len(X_train_supervised))
+            row["train_source"] = "mixed supervised few-shot cohort"
             metrics_rows.append(row)
             np.savez_compressed(
                 args.report_dir / f"predictions_{name}.npz",

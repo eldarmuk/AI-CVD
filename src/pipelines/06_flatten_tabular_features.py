@@ -22,6 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data" / "processed" / "anomaly_detection"
 FEATURE_NAMES_PATH = PROJECT_ROOT / "data" / "processed" / "feature_names.txt"
 STATS_PATH = DATA_DIR / "normalization_stats.json"
+SUPERVISED_TRAIN_ARCHIVE = DATA_DIR / "few_shot_train_level3_balanced.npz"
 
 STATIC_FEATURES = {
     "age",
@@ -178,6 +179,43 @@ def process_split(data_dir: Path, split: str, feature_names: list[str]) -> dict:
     }
 
 
+def process_supervised_train(data_dir: Path, archive_path: Path, feature_names: list[str]) -> dict:
+    if not archive_path.exists():
+        raise FileNotFoundError(f"Missing supervised training archive: {archive_path}")
+
+    logger.info("Loading mixed supervised training archive %s", archive_path)
+    archive = np.load(archive_path, allow_pickle=True)
+    X = archive["X"]
+    y = np.asarray(archive["y"]).astype(np.int8)
+    if len(X) != len(y):
+        raise ValueError(f"Supervised target length mismatch: X={len(X)}, y={len(y)}")
+    logger.info("supervised train shape: %s; positives=%s", X.shape, int(y.sum()))
+
+    X_flat = flatten_sequences(X, feature_names)
+    x_out = data_dir / "X_train_supervised_flat.parquet"
+    y_out = data_dir / "y_train_supervised.npy"
+
+    X_flat.to_parquet(x_out, index=False)
+    np.save(y_out, y)
+
+    logger.info(
+        "Saved supervised train: X_flat=%s, y=%s, positives=%s",
+        X_flat.shape,
+        y.shape,
+        int(y.sum()),
+    )
+    return {
+        "X_source": str(archive_path),
+        "X_flat_path": str(x_out),
+        "y_path": str(y_out),
+        "X_shape": list(X.shape),
+        "X_flat_shape": list(X_flat.shape),
+        "y_shape": list(y.shape),
+        "positives": int(y.sum()),
+        "columns": list(X_flat.columns),
+    }
+
+
 def write_metadata(data_dir: Path, feature_names: list[str], split_metadata: dict[str, dict]) -> None:
     dynamic_features = [name for name in feature_names if name not in STATIC_FEATURES]
     static_features = [name for name in feature_names if name in STATIC_FEATURES]
@@ -204,6 +242,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
     parser.add_argument("--feature-names", type=Path, default=FEATURE_NAMES_PATH)
     parser.add_argument("--stats-path", type=Path, default=STATS_PATH)
+    parser.add_argument("--supervised-train-archive", type=Path, default=SUPERVISED_TRAIN_ARCHIVE)
     return parser.parse_args()
 
 
@@ -214,6 +253,11 @@ def main() -> None:
         split: process_split(args.data_dir, split, feature_names)
         for split in ["train", "val", "test"]
     }
+    split_metadata["train_supervised"] = process_supervised_train(
+        args.data_dir,
+        args.supervised_train_archive,
+        feature_names,
+    )
     write_metadata(args.data_dir, feature_names, split_metadata)
     logger.info("Vectorized tabular flattening complete: %s", args.data_dir)
 
