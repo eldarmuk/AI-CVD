@@ -1,4 +1,5 @@
 pandas
+numpy>=1.26,<3
 polars
 duckdb
 openpyxl

@@ -1,14 +1,10 @@
-import pandas as pd
+from src.ai_cvd.features import FEATURE_NAMES
 
-def get_feature_columns(df: pd.DataFrame) -> list:
-    """
-    Centralized logic to extract feature columns.
-    Excludes metadata/labels to return only model input features.
-    """
-    EXCLUDE_COLS = {
-        'senior_id', 'timestamp',
-        'label_1', 'label_2', 'label_3',
-        'hour', 'day_of_week'
-    }
-    
-    return [col for col in df.columns if col not in EXCLUDE_COLS]
+
+def get_feature_columns(df) -> list:
+    """Fixed v2 allowlist; reject legacy/incomplete schemas instead of guessing."""
+    columns = set(df.columns if hasattr(df, "columns") else df)
+    missing = set(FEATURE_NAMES) - columns
+    if missing:
+        raise ValueError(f"Not the canonical v2 feature schema; missing: {sorted(missing)}")
+    return list(FEATURE_NAMES)

@@ -1,3 +1,4 @@
+# LEGACY V1: this is historical analysis, not the canonical primary pipeline.
 """
 Classical machine learning and anomaly-detection baselines.
 
@@ -7,6 +8,9 @@ test split preserves its natural class imbalance.
 """
 
 from __future__ import annotations
+
+if __name__ == "__main__":
+    raise SystemExit("LEGACY EXPERIMENT: retired from the primary task. Use python -m src.ai_cvd.cli --help. Training migration is intentionally deferred.")
 
 import argparse
 import json

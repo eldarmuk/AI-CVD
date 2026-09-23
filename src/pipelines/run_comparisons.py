@@ -1,3 +1,4 @@
+# LEGACY V1: this is historical analysis, not the canonical primary pipeline.
 """
 FIXED Comparison Script for Paper (No Pickle Errors)
 
@@ -7,6 +8,9 @@ Changes:
 3. All models use proper train/val/test splits
 4. Thresholds selected on validation, applied to test
 """
+
+if __name__ == "__main__":
+    raise SystemExit("LEGACY EXPERIMENT: retired from the primary task. Use python -m src.ai_cvd.cli --help. Training migration is intentionally deferred.")
 
 import torch
 import torch.nn as nn

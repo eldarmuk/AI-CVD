@@ -1,3 +1,4 @@
+# LEGACY V1: this is historical analysis, not the canonical primary pipeline.
 """
 generate_sequences.py
 
@@ -7,6 +8,9 @@ Corrected pipeline for Senior Early Warning System.
 - Performs Downsampling BEFORE writing to disk (saves IO/Space).
 - Outputs separate .npy files for efficiency (Standard for DL).
 """
+
+if __name__ == "__main__":
+    raise SystemExit("LEGACY EXPERIMENT: retired from the primary task. Use python -m src.ai_cvd.cli --help. Training migration is intentionally deferred.")
 
 import argparse
 from pathlib import Path

@@ -1,3 +1,4 @@
+# LEGACY V1: this is historical analysis, not the canonical primary pipeline.
 """
 Vectorized flattening of existing sequence datasets for tabular baselines.
 
@@ -7,6 +8,9 @@ of generating new sliding windows from Parquet. It converts each
 """
 
 from __future__ import annotations
+
+if __name__ == "__main__":
+    raise SystemExit("LEGACY EXPERIMENT: retired from the primary task. Use python -m src.ai_cvd.cli --help. Training migration is intentionally deferred.")
 
 import argparse
 import json

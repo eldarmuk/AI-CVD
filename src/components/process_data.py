@@ -1,3 +1,8 @@
+if __name__ == "__main__":
+    raise SystemExit("Retired v1 ETL. Use python -m src.ai_cvd.cli build --help; raw source tables are read-only.")
+
+# Legacy demographic/measurement utilities are retained for historical inspection only.
+# Primary v2 cleaning is src.ai_cvd.features; process_alerts below uses v2 episodes.
 import sqlite3
 import pandas as pd
 import numpy as np
@@ -126,32 +131,9 @@ def get_valid_senior_ids(conn_out):
 
 
 def classify_severity(note):
-    if pd.isna(note):
-        return -1
-
-    note_l = str(note).lower()
-
-    if any(k in note_l for k in ['alarm przypadkowy', 'alarm testowy', 'alert techniczny']):
-        return 0
-
-    no_zrm = 'brak wskazań do interwencji zrm' in note_l
-
-    if not no_zrm and (
-        'zdecydowano się na interwencję zrm' in note_l
-        or 'zdecydowano wezwać zrm' in note_l
-        or 'wezwanie zrm' in note_l
-        or ('zagrożenia życia i zdrowia' in note_l and 'nawiązano kontakt' in note_l)
-        or ('na podstawie odczytów z systemu' in note_l and 'zrm' in note_l)
-    ):
-        return 3
-
-    if 'nie nawiązano kontaktu' in note_l:
-        return 2
-
-    if 'nawiązano kontakt' in note_l or 'opiekun powiadomiony' in note_l:
-        return 1
-
-    return -1
+    """Canonical v2 keyword classification; the result is a proxy, not adjudication."""
+    from src.ai_cvd.episodes import classify_severity as canonical_classify
+    return canonical_classify(note)
 
 
 def categorize_disease(disease_name):
@@ -509,83 +491,28 @@ def process_measurements_duckdb(raw_db_path, processed_db_path):
     print(f"\nOK: Measurements processing complete! Wrote {final_count:,} unique rows.", flush=True)
     conn.close()
 
-def process_alerts(conn_in, conn_out):
+def process_alerts(conn_in, conn_out, *, task=None, source_contract=None):
+    """Build versioned episodes from raw alerts without modifying raw/legacy tables.
+
+    Refuses to infer a timezone or overwrite existing v2 episode tables.
     """
-    Process alerts: classify severity and drop burst duplicates.
-
-    Severity scale
-    ──────────────
-      -1  Undocumented / unknown
-       0  Noise (known false / test / technical alarm)
-       1  Low  (contact established, no ZRM)
-       2  Potential (no contact)
-       3  Acute (ZRM dispatched)
-    """
-    print("\n" + "="*80)
-    print("PROCESSING ALERTS TABLE (RESUMABLE)")
-    print("="*80)
-
-    cursor = conn_out.cursor()
-    try:
-        count = cursor.execute("SELECT COUNT(*) FROM alerts").fetchone()[0]
-        if count > 0:
-            print(f"OK: Alerts table already processed: {count:,} rows")
-            return pd.read_sql_query("SELECT * FROM alerts", conn_out)
-    except Exception:
-        pass
-
-    df = pd.read_sql_query("SELECT * FROM alerts", conn_in)
-    print(f"Initial alerts: {len(df):,}")
-
-    valid_seniors = get_valid_senior_ids(conn_out)
-    before = len(df)
-    df = df[df['senior_id'].isin(valid_seniors)]
-    print(f"After filtering unknown seniors: {len(df):,} (dropped {before - len(df):,})")
-
-    df['severity'] = df['sos_note'].apply(classify_severity)
-
-    df['alert_date'] = pd.to_datetime(df['alert_date'], format='ISO8601')
-    df = df.sort_values(['senior_id', 'alert_date']).reset_index(drop=True)
-
-    df['_time_diff_min'] = (
-        df.groupby('senior_id')['alert_date']
-          .diff()
-          .dt.total_seconds()
-          .div(60)
-    )
-    df['_is_burst_dup'] = df['_time_diff_min'] <= BURST_WINDOW_MINUTES
-
-    n_total   = len(df)
-    n_dropped = int(df['_is_burst_dup'].sum())
-    df_clean  = df[~df['_is_burst_dup']].copy()
-
-    print(f"Burst duplicates dropped : {n_dropped:,} / {n_total:,} "
-          f"({n_dropped / n_total * 100:.1f}%)")
-    print(f"Canonical alerts retained: {len(df_clean):,}  "
-          f"(one per event, exact original timestamp)")
-
-    severity_map = {-1: 'Undocumented', 0: 'Noise/Tech', 1: 'Low',
-                    2: 'Potential', 3: 'Acute'}
-    print("\nSeverity distribution (post-dedup):")
-    for sev, cnt in df_clean['severity'].value_counts().sort_index().items():
-        pct = cnt / len(df_clean) * 100
-        label = severity_map.get(sev, '?')
-        print(f"  Level {sev:+d}  ({label:14s}): {cnt:,}  ({pct:.1f}%)")
-
-    df_clean['alert_date'] = df_clean['alert_date'].dt.strftime('%Y-%m-%d %H:%M:%S')
-    df_out = df_clean[['alert_id', 'senior_id', 'alert_date', 'severity', 'sos_note']].copy()
-
-    df_out.to_sql('alerts', conn_out, if_exists='replace', index=False)
-    update_checkpoint(conn_out, 'alerts', 0, completed=True)
-    print("OK: Alerts table written")
-
-    c = conn_out.cursor()
-    c.execute("CREATE INDEX IF NOT EXISTS idx_alerts_senior   ON alerts(senior_id)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_alerts_date     ON alerts(alert_date)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_alerts_severity ON alerts(severity)")
-    conn_out.commit()
-
-    return df_out
+    from src.ai_cvd.task import load_task
+    from src.ai_cvd.episodes import build_episodes, write_episode_tables
+    from src.ai_cvd.cli import localize
+    if source_contract is None:
+        raise ValueError("An explicit source timestamp/timezone contract is required")
+    task = task or load_task()
+    cursor = conn_in.execute("SELECT alert_id, senior_id, alert_date, sos_note FROM alerts")
+    names = [item[0] for item in cursor.description]
+    alerts = []
+    for values in cursor:
+        row = dict(zip(names, values))
+        row["alert_date"] = localize(row["alert_date"], source_contract)
+        alerts.append(row)
+    episodes = build_episodes(alerts, task)
+    with conn_out:
+        write_episode_tables(conn_out, episodes)
+    return episodes
 
 
 def create_risk_profiles(conn_in, conn_out):
