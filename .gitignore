@@ -14,6 +14,8 @@ __pycache__/
 # Data Files
 *.parquet
 *.npy
+*.npz
+*.jsonl
 *.csv
 *.json
 *.db
@@ -24,6 +26,17 @@ data/raw/
 data/processed/
 db/
 models/
+
+# All v2 artifacts remain private, including synthetic CLI output by default.
+data/private_audit/
+data/private/
+runs/
+.tmp/
+output/
+tmp/
+
+# Public hand-authored configuration is allowed; generated metadata is not.
+!configs/**
 
 # Logs
 logs/
