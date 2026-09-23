@@ -19,7 +19,8 @@ class MemorySource:
 
 def fixture(task):
     start = datetime(2030, 1, 1, tzinfo=timezone.utc)
-    ids = ["fictional_" + str(i) for i in range(6)]
+    # Handwritten fictional IDs exercise all three frozen hash partitions.
+    ids = ["fictional_" + str(i) for i in (0, 1, 2, 3, 10, 5)]
     measurements, alerts, coverages, histories = [], [], [], []
     for i, sid in enumerate(ids):
         coverages.append({"senior_id": sid, "enrollment_time": iso(start), "measurement_coverage_end": iso(start + timedelta(hours=72)), "outcome_coverage_start": iso(start), "outcome_coverage_end": iso(start + timedelta(hours=60 if i == 5 else 72))})

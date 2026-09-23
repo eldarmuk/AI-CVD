@@ -11,7 +11,7 @@ import unittest
 from src.ai_cvd.task import load_task, Task
 from src.ai_cvd.features import FEATURE_NAMES, build_features, validate_source_contract
 from src.ai_cvd.episodes import iso, as_time, build_episodes
-from src.ai_cvd.dataset import generate_patient_manifest, sequence_for_sample, training_manifest
+from src.ai_cvd.dataset import generate_patient_manifest, sequence_for_sample, training_manifest, patient_split
 from src.ai_cvd.cli import SQLiteSource, DuckDBSource, build_run, file_hash, localize, verify_run
 from src.ai_cvd.synthetic import fixture
 from src.ai_cvd.arrays import export_sequences, verified_shards
@@ -65,6 +65,9 @@ class IntegrityTests(unittest.TestCase):
         block = text.split('<!-- FEATURE_ORDER_START -->')[1].split('<!-- FEATURE_ORDER_END -->')[0]
         names = block.split('```text\n')[1].split('```')[0].strip().splitlines()
         self.assertEqual(tuple(names), FEATURE_NAMES)
+
+    def test_fixture_exercises_every_patient_partition(self):
+        self.assertEqual({patient_split(sid, self.task) for sid in self.source.patients()}, {'train','validation','test'})
 
     def test_processed_source_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
