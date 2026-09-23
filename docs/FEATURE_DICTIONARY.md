@@ -1,114 +1,195 @@
-# Feature Dictionary and System Mapping
+# Canonical feature dictionary — schema v2
 
-This document defines the columns produced in `data/processed/multimodal_features.parquet`
-by `src/pipelines/00_build_multimodal_features_duckdb.py` and consumed by the
-sequence and benchmark pipelines. Rows are keyed by `senior_id` and a 5-minute
-bucketed `timestamp`. Targets are future-looking labels over the next 24 hours.
+Authority: `configs/tasks/level3_4h.toml`; implementation:
+`src/ai_cvd/features.py`. This supersedes the historical Parquet dictionary.
+The raw database is read-only. Features are generated independently of alerts.
 
-## Dataset Grain and Split Policy
+## Grain, timing and inputs
 
-- **Row grain:** one senior, one 5-minute time bucket.
-- **Window grain:** downstream sequence models use 96 consecutive rows, equal to
-  a 24-hour lookback window.
-- **Split unit:** `senior_id`. A senior must appear in exactly one of train,
-  validation, or test.
-- **Training anomaly policy:** unsupervised/anomaly training data is restricted
-  to pure-healthy windows. For the Level 3 task, pure-healthy means no
-  `label_1`, `label_2`, or `label_3` inside the lookback window.
-- **Primary binary benchmark target:** `label_3`, indicating an acute crisis in
-  the future 24-hour lookahead window.
+One row is one patient and one five-minute bucket. `timestamp` is its inclusive
+start; `available_at` is its exclusive end. The row is unavailable before that
+end. A sample at t contains 96 rows with starts in `[t-8h,t)` and availability
+no later than t. Source readings at exactly t never enter X_t. The primary target
+is a Level 3 recorded escalation in `(t,t+4h]`, assigned from episodes separately
+in the sample manifest. Level 2+3 is an explicitly selected secondary endpoint.
 
-## Raw Dynamic Physiological Signals
+`senior_id`, timestamps, sample IDs, labels, outcomes, episode IDs, lead times,
+split and task IDs are metadata, never model inputs. `FEATURE_NAMES` is the fixed
+ordered allowlist, copied into every run and exported array. No dynamic column
+selection, normalizer, imputation or neural architecture change occurs here.
 
-| Column | Unit | Type | Source and processing | Modeling role |
-| --- | --- | --- | --- | --- |
-| `temperature` | degrees C | float | Average temperature measurement in the 5-minute bucket. Missing when no temperature measurement was observed. | Core time-series physiology. |
-| `heartrate` | bpm | float | Average heart-rate measurement in the bucket. Missing when not observed. | Core cardiovascular time-series physiology. |
-| `sbp` | mmHg | float | Average systolic blood pressure from blood-pressure records in the bucket. Missing when not observed. | Core hemodynamic signal. |
-| `dbp` | mmHg | float | Average diastolic blood pressure from blood-pressure records in the bucket. Missing when not observed. | Core hemodynamic signal and denominator for `shock_index`. |
-| `saturation` | percent SpO2 | float | Average saturation measurement in the bucket. Missing when not observed. | Core respiratory/oxygenation signal. |
-| `steps` | count per 5-minute bucket | float | Sum of step measurements in the bucket, with absent step observations coalesced to zero. Sequence generation caps extreme values at 2000. | Mobility and behavior signal. |
+## Raw validity, duplicates and physiology
 
-## Derived Dynamic Physiological Signals
+Validity bounds are inclusive and live in the canonical task config. Nonfinite,
+unparseable and out-of-range values become NULL; they are not clipped to plausible
+extremes. Exact patient/time/type duplicates are consolidated before bucketing.
+For physiological values the mean of valid duplicates is used. Conflicting step
+values at exactly the same time are rejected. Every invalid channel remains missing
+and cannot reset its valid-observation timer. Inverted BP pairs nullify both values.
 
-| Column | Unit | Type | Definition | Notes |
-| --- | --- | --- | --- | --- |
-| `pulse_pressure` | mmHg | float | `sbp - dbp`. | Clipped to NULL when the bucket average has `dbp >= sbp`, preventing inverted pressure values from entering the model as valid physiology. |
-| `shock_index` | ratio | float | `heartrate / dbp`. | Computed only when both `heartrate` and nonzero `dbp` are available. Used as a hemodynamic instability indicator. |
-| `hr_volatility` | bpm | float | Four-hour rolling sample standard deviation of `heartrate`, partitioned by `senior_id` and ordered by `timestamp`. | Captures short-horizon autonomic/heart-rate variability. |
-| `bp_trend` | mmHg per epoch-second | float | Three-hour rolling linear-regression slope of `sbp` against bucket time. | Captures directional SBP trajectory. Sequence generation fills missing values with `0.0`. |
+| Feature | Units | Definition |
+|---|---|---|
+| `temperature` | degrees C | Mean valid bucket readings, inclusive validity 30–45 |
+| `heartrate` | bpm | Mean valid bucket readings, 30–220 |
+| `sbp` | mmHg | Mean valid systolic readings, 70–250 |
+| `dbp` | mmHg | Mean valid diastolic readings, 40–140 |
+| `saturation` | percent | Mean valid SpO2, 50–100; both tails invalidated |
+| `steps` | count, subject to explicit source semantics | Sum of known increments ending in this bucket; missing if no computable increment |
+| `pulse_pressure` | mmHg | Mean valid raw paired SBP−DBP, first within duplicate groups then within buckets; positive differences below configured 10 mmHg minimum are missing |
+| `shock_index` | ratio | Bucket mean HR / bucket mean **SBP**, only when both valid |
 
-## Circadian and Temporal Parameters
+Pulse pressure has one authoritative function, `pulse_pressure()`. It is calculated
+from valid paired readings, never resurrected from independent bucket means after
+being invalidated. Valid SBP/DBP can remain available when a narrow PP is missing.
+If only one BP component is recorded/valid, that component can be observed but PP
+is missing. Shock index uses co-bucket measurements, not necessarily simultaneous
+measurements; synchronization within five minutes is an explicit approximation.
 
-| Column | Unit | Type | Definition | Notes |
-| --- | --- | --- | --- | --- |
-| `timestamp` | datetime | timestamp | Five-minute bucket timestamp generated from each senior's observed measurement bounds. | Ordering key for all rolling features and sequence windows. |
-| `hour` | 0-23 | integer | Hour extracted from `timestamp`. | Temporal descriptor. Excluded from neural input by the current shared feature selector. |
-| `is_night` | binary | integer | `1` when `hour` is 0 through 5, else `0`. | Circadian/nighttime indicator. Excluded from neural input by the current shared feature selector. |
-| `day_of_week` | 0-6 | integer | Day of week extracted from `timestamp`. | DuckDB `extract(dow)` convention. Excluded from neural input by the current shared feature selector. |
-| `hour_sin` | cyclical encoding | float | `sin(2 * pi * hour / 24)`. | Continuous cyclical representation of hour. |
-| `hour_cos` | cyclical encoding | float | `cos(2 * pi * hour / 24)`. | Complements `hour_sin` to avoid artificial midnight discontinuity. |
-| `steps_rolling_sum_6h` | steps | float | Six-hour rolling sum of bucketed `steps`, partitioned by `senior_id`. | Recent mobility/activity load. |
+## Steps — do not assume increments
 
-## Behavioral Sparsity Parameters
+The source contract must declare and justify `increments` or `cumulative_counter`.
+Unknown semantics cause an error. There is no default sum of private step readings.
 
-Silence-tracking features measure elapsed minutes since the most recent observed
-measurement of each modality for the same senior. They encode missingness and
-care-interaction patterns without forward-filling the vital sign itself.
+For increments, exact duplicates count once and distinct observed increments sum.
+For cumulative counters, differences are taken only between successive valid
+readings. The first reading and any decrease/reset give unknown activity; the new
+counter initializes subsequent differences. No activity is imputed across a reset.
+The source contract also requires `counter_reset_policy`: `daily` suppresses every
+cross-date delta in the declared source timezone, even without a visible decrease;
+`decrease_only` is an explicit alternative assumption for non-daily counters.
+The private source audit strongly supports daily cumulative counters empirically;
+it is not authoritative device documentation. Reset timezone remains a declaration.
+Known zero differences are observed zero activity. A delta is attributed to the
+bucket containing its endpoint and can span more than five minutes; the interval
+duration below makes this visible. Negative/raw values above the configured limit
+are invalid; a device with a different range needs a separately versioned contract.
 
-| Column | Unit | Type | Definition |
-| --- | --- | --- | --- |
-| `time_since_last_temperature` | minutes | float | Minutes since latest observed temperature measurement at or before `timestamp`. |
-| `time_since_last_heartrate` | minutes | float | Minutes since latest observed heart-rate measurement at or before `timestamp`. |
-| `time_since_last_sbp` | minutes | float | Minutes since latest observed blood-pressure measurement at or before `timestamp`. |
-| `time_since_last_dbp` | minutes | float | Same blood-pressure recency timer as `time_since_last_sbp`. |
-| `time_since_last_pulse_pressure` | minutes | float | Same blood-pressure recency timer as `time_since_last_sbp`; pulse pressure is derived from blood pressure. |
-| `time_since_last_steps` | minutes | float | Minutes since latest observed step measurement at or before `timestamp`. |
-| `time_since_last_saturation` | minutes | float | Minutes since latest observed saturation measurement at or before `timestamp`. |
+| Additional feature | Definition |
+|---|---|
+| `steps_source_value` | Last valid original step reading in the bucket, before differencing |
+| `observed_steps_source` | 1 if at least one valid original step reading exists, including initial/reset counters |
+| `steps_counter_reset` | 1 if a valid cumulative reading decreases, or crosses a local date under the daily reset policy |
+| `steps_delta_interval_minutes` | Maximum interval spanned by computed cumulative deltas in the bucket; NULL for increments/no delta |
 
-## Static Demographics and Historical Context
+## Observation masks and recency
 
-| Column | Unit | Type | Definition | Notes |
-| --- | --- | --- | --- | --- |
-| `senior_id` | identifier | integer/string-like | Senior identifier. | Used for subject-wise isolation across splits. It must not be used as a predictive feature. |
-| `age` | years | integer | Age from the senior demographic table. | Static demographic feature. |
-| `gender` | binary | integer | Encoded as `0 = Male`, `1 = Female`; NULL when unknown or unmapped. | Static demographic feature. |
-| `recent_event_burden` | count | float | Count of compressed alerts with severity 1, 2, or 3 in the preceding 48 hours, from `t - 48h` inclusive to `t` exclusive. | Historical context feature. It uses past alerts only and excludes current/future alerts. |
+For each of `temperature`, `heartrate`, `sbp`, `dbp`, `saturation`, `steps` and
+`pulse_pressure`, `observed_<name>` is 1 if a valid bucket value exists, else 0.
+`time_since_last_<name>` is elapsed minutes from the latest valid contributing
+reading to bucket **end**. It is NULL before the first valid observation and
+otherwise nonnegative. Invalid/NULL readings never reset it. BP and PP each track
+their own valid observations, rather than blindly sharing a source-record timer.
+For steps the timer/mask concerns computable activity increments; source-counter
+observation is separately represented above.
 
-## Static Clinical Comorbidity Domains
+Missing steps are NULL with mask 0; observed zero steps are 0 with mask 1. Missing
+vitals are never mean-filled by this pipeline. Any downstream model must preserve
+the masks and fit preprocessing only on training data.
 
-The pipeline maps each senior's clinical history into one-hot disease-domain
-indicators and joins the vector to every timestamp for that senior.
+## Causal derived and clock features
 
-| Column | Type | Definition |
-| --- | --- | --- |
-| `cardiovascular` | binary | Cardiovascular disease-domain indicator. |
-| `metabolic_endocrine` | binary | Metabolic and endocrine disease-domain indicator. |
-| `neurological` | binary | Neurological disease-domain indicator. |
-| `psychiatric_cognitive` | binary | Psychiatric or cognitive disease-domain indicator. |
-| `musculoskeletal` | binary | Musculoskeletal disease-domain indicator. |
-| `respiratory` | binary | Respiratory disease-domain indicator. |
-| `gastro_renal_urologic` | binary | Gastrointestinal, renal, or urologic disease-domain indicator. |
-| `oncological` | binary | Oncological disease-domain indicator. |
-| `sensory` | binary | Sensory impairment disease-domain indicator. |
-| `other_functional_risk` | binary | Other functional risk-domain indicator. |
-| `other` | binary | Unclassified disease-domain indicator, sourced from `unclassified` in the risk-profile table. |
+| Feature | Definition |
+|---|---|
+| `hr_bucket_sd_4h` | Sample SD of observed bucket-mean HR over the trailing four hours, at least two observations |
+| `bp_trend_mmhg_per_hour` | SBP least-squares slope over trailing three hours, expressed per hour; NULL with fewer than two observations |
+| `steps_sum_6h` | Sum of known step increments whose endpoints fall in the trailing six hours; NULL with no observed increments |
+| `steps_observed_buckets_6h` | Number of buckets contributing a known step increment to that sum |
+| `hour_sin`, `hour_cos` | Sine/cosine of UTC hour including minutes at bucket start |
+| `is_night` | 1 for UTC clock hour [00:00,06:00); not a measured sleep state |
 
-## Lookahead Target Labels
+Trailing intervals include the current closed bucket and exclude buckets starting
+before `available_at - rolling_duration`. Partial activity coverage is not an exact
+six-hour activity total. Cumulative deltas can span outside that trailing interval;
+the duration feature and masks must inform interpretation. Recency missingness is
+not automatically illness. `hr_bucket_sd_4h` is **not beat-to-beat HRV** and must not
+be described as such. No RR intervals are available to establish beat-level HRV.
 
-Alerts are first compressed with a 10-minute burst window, retaining only the
-first alert in a burst. Labels then represent the presence of a future alert in
-the mutually exclusive lookahead interval from `t` exclusive through
-`t + 24h` inclusive.
+## Clinical snapshots
 
-| Column | Type | Definition | Benchmark use |
-| --- | --- | --- | --- |
-| `label_1` | binary | Low Risk alert within the next 24 hours. | Auxiliary future-risk label. |
-| `label_2` | binary | Potential/Unknown alert within the next 24 hours. | Auxiliary future-risk label. |
-| `label_3` | binary | Acute Crisis alert within the next 24 hours. | Primary binary benchmark target. |
+Optional numerical fields are `age`, `gender`, `cardiovascular`,
+`metabolic_endocrine`, `neurological`, `psychiatric_cognitive`, `musculoskeletal`,
+`respiratory`, `gastro_renal_urologic`, `oncological`, `sensory`,
+`other_functional_risk`, and `other`. Each has a `known_<name>` mask.
 
-Although alert severities are mutually exclusive at the alert event level, the
-three future-window labels can co-occur when multiple severities occur inside
-the same 24-hour lookahead interval. Binary Level 3 benchmarking should treat
-`label_3` as the positive class and all windows with `label_3 == 0` as negative,
-with optional pure-healthy filtering for anomaly-detector training.
+Age must be age at the documented snapshot, not recalculated using the current
+calendar year. Gender coding, if used, must be declared by the snapshot producer;
+the established convention is 0 male / 1 female, NULL unknown. Disease domains
+are multi-hot indicators, not mutually exclusive one-hot classes. Unknown history
+is NULL, not absence of disease. Undated current disease/medication tables are not
+automatically eligible inputs. Only snapshots available strictly before bucket end
+can contribute. `verified_baseline` requires a provenance declaration and dates no
+later than enrollment; otherwise use `dated_snapshots` or `exclude`.
+
+## Deliberate changes from historical schema
+
+Removed future labels from feature artifacts, `recent_event_burden` pending as-of
+validation, raw `hour`/`day_of_week`, legacy `hr_volatility`, and ambiguous activity
+summation. Added explicit availability, masks, known-history flags and source-step
+diagnostics. New names, ordering, schema version and task fingerprints deliberately
+prevent reuse of historical arrays/checkpoints without a future migration task.
+
+## Exact array feature order
+
+<!-- FEATURE_ORDER_START -->
+```text
+temperature
+heartrate
+sbp
+dbp
+saturation
+steps
+pulse_pressure
+steps_source_value
+observed_steps_source
+steps_counter_reset
+steps_delta_interval_minutes
+shock_index
+hr_bucket_sd_4h
+bp_trend_mmhg_per_hour
+steps_sum_6h
+steps_observed_buckets_6h
+hour_sin
+hour_cos
+is_night
+observed_temperature
+observed_heartrate
+observed_sbp
+observed_dbp
+observed_saturation
+observed_steps
+observed_pulse_pressure
+time_since_last_temperature
+time_since_last_heartrate
+time_since_last_sbp
+time_since_last_dbp
+time_since_last_saturation
+time_since_last_steps
+time_since_last_pulse_pressure
+age
+gender
+cardiovascular
+metabolic_endocrine
+neurological
+psychiatric_cognitive
+musculoskeletal
+respiratory
+gastro_renal_urologic
+oncological
+sensory
+other_functional_risk
+other
+known_age
+known_gender
+known_cardiovascular
+known_metabolic_endocrine
+known_neurological
+known_psychiatric_cognitive
+known_musculoskeletal
+known_respiratory
+known_gastro_renal_urologic
+known_oncological
+known_sensory
+known_other_functional_risk
+known_other
+```
+<!-- FEATURE_ORDER_END -->

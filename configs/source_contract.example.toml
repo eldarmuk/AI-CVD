@@ -1,0 +1,11 @@
+# TEMPLATE ONLY: unverified values deliberately prevent a private-data run.
+steps_semantics = "unverified"
+counter_reset_policy = "unverified" # cumulative_counter requires daily or decrease_only
+steps_evidence = "REQUIRED: device documentation or explicit, approved study assumption"
+measurement_availability = "unverified"
+availability_evidence = "REQUIRED: receipt timestamp semantics or explicit zero-latency assumption"
+coverage_evidence = "REQUIRED: independently established monitoring AND outcome ascertainment intervals"
+clinical_history_policy = "exclude"
+source_timezone = "REQUIRED"
+alert_time_semantics = "unverified"
+alert_time_evidence = "REQUIRED: severity recorded at alert creation, or explicit retrospective timing assumption"
