@@ -15,7 +15,7 @@ class Task:
 
     def __getattr__(self, name):
         try:
-            return self.values[name]
+            return object.__getattribute__(self, "values")[name]
         except KeyError as exc:
             raise AttributeError(name) from exc
 
@@ -47,7 +47,7 @@ class Task:
             raise ValueError("Unsupported secondary endpoint")
         if self.input_interval != "[t-lookback,t)" or self.target_interval != "(t,t+horizon]":
             raise ValueError("Unsupported interval semantics")
-        if self.event_time != "first_qualifying_alert_recorded_at" or self.burst_boundary != "inclusive_chained":
+        if self.event_time != "first_alarm_with_retrospective_qualifying_classification" or self.burst_boundary != "inclusive_chained":
             raise ValueError("Unsupported episode semantics")
         if self.split_unit != "senior_id" or len(self.split_ratios) != 3:
             raise ValueError("Patient-level train/validation/test split required")

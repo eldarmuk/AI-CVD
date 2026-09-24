@@ -1,7 +1,8 @@
 # Canonical feature dictionary — schema v2
 
 Authority: `configs/tasks/level3_4h.toml`; implementation:
-`src/ai_cvd/features.py`. This supersedes the historical Parquet dictionary.
+`src/ai_cvd/features.py` and its parity-tested vector implementation
+`src/ai_cvd/fast_features.py`. This supersedes the historical Parquet dictionary.
 The raw database is read-only. Features are generated independently of alerts.
 
 ## Grain, timing and inputs
@@ -10,13 +11,15 @@ One row is one patient and one five-minute bucket. `timestamp` is its inclusive
 start; `available_at` is its exclusive end. The row is unavailable before that
 end. A sample at t contains 96 rows with starts in `[t-8h,t)` and availability
 no later than t. Source readings at exactly t never enter X_t. The primary target
-is a Level 3 recorded escalation in `(t,t+4h]`, assigned from episodes separately
+is an alarm initiated in `(t,t+4h]` and retrospectively classified Level 3, assigned from episodes separately
 in the sample manifest. Level 2+3 is an explicitly selected secondary endpoint.
 
 `senior_id`, timestamps, sample IDs, labels, outcomes, episode IDs, lead times,
 split and task IDs are metadata, never model inputs. `FEATURE_NAMES` is the fixed
 ordered allowlist, copied into every run and exported array. No dynamic column
-selection, normalizer, imputation or neural architecture change occurs here.
+selection or neural architecture change occurs here. The compact run stores
+training-only normalization separately; feature shards retain unnormalized values
+and missingness. No imputation is applied.
 
 ## Raw validity, duplicates and physiology
 
@@ -38,7 +41,8 @@ and cannot reset its valid-observation timer. Inverted BP pairs nullify both val
 | `pulse_pressure` | mmHg | Mean valid raw paired SBP−DBP, first within duplicate groups then within buckets; positive differences below configured 10 mmHg minimum are missing |
 | `shock_index` | ratio | Bucket mean HR / bucket mean **SBP**, only when both valid |
 
-Pulse pressure has one authoritative function, `pulse_pressure()`. It is calculated
+Pulse pressure follows the authoritative `pulse_pressure()` rule and configured
+minimum; the vectorized equivalent is parity-tested against it. It is calculated
 from valid paired readings, never resurrected from independent bucket means after
 being invalidated. Valid SBP/DBP can remain available when a narrow PP is missing.
 If only one BP component is recorded/valid, that component can be observed but PP
@@ -58,7 +62,9 @@ The source contract also requires `counter_reset_policy`: `daily` suppresses eve
 cross-date delta in the declared source timezone, even without a visible decrease;
 `decrease_only` is an explicit alternative assumption for non-daily counters.
 The private source audit strongly supports daily cumulative counters empirically;
-it is not authoritative device documentation. Reset timezone remains a declaration.
+it is not authoritative device documentation. The primary private contract uses
+researcher-attested cumulative snapshots with conservative daily reset handling in
+Europe/Warsaw, supported empirically.
 Known zero differences are observed zero activity. A delta is attributed to the
 bucket containing its endpoint and can span more than five minutes; the interval
 duration below makes this visible. Negative/raw values above the configured limit
@@ -105,6 +111,10 @@ not automatically illness. `hr_bucket_sd_4h` is **not beat-to-beat HRV** and mus
 be described as such. No RR intervals are available to establish beat-level HRV.
 
 ## Clinical snapshots
+
+The primary private compact experiment excludes all these undated fields: values
+remain NaN and known masks zero. The following policies describe reference-pipeline
+options only; they are not evidence that histories are available for this run.
 
 Optional numerical fields are `age`, `gender`, `cardiovascular`,
 `metabolic_endocrine`, `neurological`, `psychiatric_cognitive`, `musculoskeletal`,

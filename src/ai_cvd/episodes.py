@@ -68,8 +68,11 @@ def build_episodes(alerts, task):
             "episode_start": first["alert_date"], "episode_end": group[-1]["alert_date"],
             "first_severity": first["severity"], "maximum_severity": maximum,
             "final_recorded_severity": group[-1]["severity"],
-            "escalation_recorded_at": onset,
-            "maximum_severity_recorded_at": next(a["alert_date"] for a in group if a["severity"] == maximum),
+            "escalation_recorded_at": None,  # Note/decision recording time is unavailable.
+            "maximum_severity_recorded_at": None,
+            "first_higher_severity_alarm_at": onset,
+            "first_level3_alarm_at": next((a["alert_date"] for a in group if a["severity"] == 3), None),
+            "first_maximum_severity_alarm_at": next(a["alert_date"] for a in group if a["severity"] == maximum),
             "constituent_count": len(group),
             "constituents": [{"alert_id": str(a["alert_id"]), "timestamp": a["alert_date"], "severity": a["severity"]} for a in group],
             "outcome_basis": "maximum_recorded_keyword_proxy_not_clinician_adjudicated",
@@ -78,7 +81,7 @@ def build_episodes(alerts, task):
 
 
 def event_time(episode, severities):
-    """First qualifying recorded alert, never first lower-severity alert backdated."""
+    """Initiation of first alarm retrospectively classified as qualifying, not dispatch."""
     return next((as_time(a["timestamp"]) for a in episode["constituents"] if a["severity"] in severities), None)
 
 

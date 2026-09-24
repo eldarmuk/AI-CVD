@@ -127,6 +127,7 @@ def generate_patient_manifest(features, episodes, coverage, task, endpoint=None)
             "target": int(bool(matched)), "episode_id": matched[0][1] if matched else None,
             "episode_ids": [eid for _, eid in matched],
             "lead_minutes": (matched[0][0] - t).total_seconds() / 60 if matched else None,
+            "lead_time_definition": "minutes_to_alarm_initiation",
             "split": split, "task_identifier": task.identifier, "endpoint": endpoint,
             "sampling": "complete_eligible_stream", "feature_schema": task.feature_schema_version,
         }

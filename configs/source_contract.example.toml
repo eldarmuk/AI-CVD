@@ -4,8 +4,19 @@ counter_reset_policy = "unverified" # cumulative_counter requires daily or decre
 steps_evidence = "REQUIRED: device documentation or explicit, approved study assumption"
 measurement_availability = "unverified"
 availability_evidence = "REQUIRED: receipt timestamp semantics or explicit zero-latency assumption"
-coverage_evidence = "REQUIRED: independently established monitoring AND outcome ascertainment intervals"
+coverage_evidence = "REQUIRED: externally established intervals, or explicit researcher-attested recorded-alert completeness with retrospective observed-support restrictions"
 clinical_history_policy = "exclude"
 source_timezone = "REQUIRED"
-alert_time_semantics = "unverified"
-alert_time_evidence = "REQUIRED: severity recorded at alert creation, or explicit retrospective timing assumption"
+alert_time_semantics = "alarm_initiation_with_retrospective_classification"
+alert_time_evidence = "REQUIRED: identify alarm initiation timestamp; notes may be assigned later for retrospective classification"
+
+[evidence]
+measurement_availability = "unavailable"
+timezone = "unavailable"
+outcome_completeness = "unavailable" # compact observed-support build requires researcher_attestation
+observed_support = "derived_from_source"
+enrollment_discharge_outages = "unavailable"
+alarm_initiation = "unavailable"
+severity_recording_time = "unavailable" # not a blocker for retrospective alarm classification
+steps = "unavailable"
+clinical_history_availability = "unavailable"

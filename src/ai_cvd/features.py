@@ -64,8 +64,8 @@ def validate_source_contract(contract):
     for key in ("steps_evidence", "availability_evidence", "coverage_evidence", "alert_time_evidence"):
         if str(contract[key]).strip().lower().startswith(("required", "unverified")):
             raise ValueError("Unresolved source evidence declaration: " + key)
-    if contract["alert_time_semantics"] != "alert_timestamp_is_severity_recorded_at":
-        raise ValueError("Explicit alert/severity recording-time declaration required")
+    if contract["alert_time_semantics"] not in {"alarm_initiation_with_retrospective_classification", "alert_timestamp_is_severity_recorded_at"}:
+        raise ValueError("Explicit alarm timing and retrospective outcome declaration required")
     if contract["steps_semantics"] not in {"increments", "cumulative_counter"}:
         raise ValueError("Unverified Steps semantics: supply documented increments or cumulative_counter")
     if contract["steps_semantics"] == "cumulative_counter":
@@ -82,6 +82,10 @@ def validate_source_contract(contract):
 
 
 def validate_coverage(coverage):
+    if "support_start" in coverage:
+        if coverage.get("coverage_basis") != "researcher_attested_complete_alerts_with_observed_support":
+            raise ValueError("Observed support requires an explicit retrospective coverage basis")
+        coverage = dict(coverage, enrollment_time=coverage["support_start"])
     keys = ("enrollment_time", "measurement_coverage_end", "outcome_coverage_start", "outcome_coverage_end")
     times = {k: as_time(coverage[k]) for k in keys}
     if times["measurement_coverage_end"] <= times["enrollment_time"]:

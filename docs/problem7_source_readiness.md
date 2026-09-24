@@ -1,3 +1,5 @@
+> Historical audit before researcher attestation. The current retrospective alarm-initiation endpoint and support policy are defined in `docs/study_protocol.md` (task v2.1). Severity need not have been known at alarm initiation to define a retrospective outcome.
+
 # Problem 7: source evidence gate
 
 The source-readiness audit is complete; canonical private dataset generation remains

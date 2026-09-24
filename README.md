@@ -1,6 +1,29 @@
-# AI-CVD — causal data pipeline, task v2
+# AI-CVD — retrospective alarm prediction, task v2.1
 
-The primary task is **Level 3 escalation within four hours**, using **96 five-minute
+The current primary endpoint is alarm initiation followed by retrospective Level-3
+classification, not the time severity became known or an ambulance was dispatched.
+Researcher attestations permit a supported retrospective study; they are not
+clinic-verified facts. See the current [study protocol](docs/study_protocol.md).
+
+The private canonical build uses bounded parallel processing and indexed sequence
+exports to avoid duplicating overlapping histories. It also fits normalization on
+unique buckets used by event-free training windows only. No model is trained:
+
+```powershell
+python -m src.ai_cvd.compact --raw-db db/hrp_data.db --source-contract PATH_TO_ATTESTED_CONTRACT --output NEW_RUN_DIRECTORY --workers 8
+python -m src.ai_cvd.compact_validate --run NEW_RUN_DIRECTORY
+python -m src.ai_cvd.compact_steps_audit --run NEW_RUN_DIRECTORY --raw-db db/hrp_data.db
+python -m src.ai_cvd.compact_report --run NEW_RUN_DIRECTORY
+```
+
+Load exact 96-row batches with `src.ai_cvd.compact.sequence_batches`, preserving
+sample IDs and export provenance. See [indexed loading](docs/indexed_loading.md)
+for verified loading and training-only normalization. The older JSONL CLI below remains the scalar
+reference/synthetic workflow; do not materialize a full private stream as duplicated
+96-row arrays. Prior blocked audits describe the pre-attestation state and are
+superseded for this explicitly retrospective task.
+
+The primary task is **an alarm within four hours subsequently classified Level 3**, using **96 five-minute
 buckets (eight hours)** of preceding observations. The authoritative configuration
 is [configs/tasks/level3_4h.toml](configs/tasks/level3_4h.toml). Read the
 [study protocol](docs/study_protocol.md) and [feature dictionary](docs/FEATURE_DICTIONARY.md).
@@ -11,8 +34,7 @@ architecture, train models, or select thresholds.
 
 ## Quick synthetic verification
 
-Python 3.11+ is required. The core tests and feature/manifest generation use the
-standard library; sequence-export tests require NumPy. Use `requirements-data.txt`
+Python 3.11+ is required. The scalar reference uses the standard library; compact builds/tests require NumPy and pandas. Use `requirements-data.txt`
 for data work. The broader historical requirements are not a reproducible training
 environment.
 
@@ -28,7 +50,7 @@ including synthetic ones, so no private metadata accidentally enters a release.
 
 ## Private extraction — explicit source declarations required
 
-Do not infer coverage from the first/last measurement. Prepare a private coverage
+For the external-coverage reference CLI, do not infer enrollment/coverage from first/last measurements. Prepare a private coverage
 CSV using externally established continuous monitoring and outcome intervals:
 
 ```text

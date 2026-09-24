@@ -45,7 +45,7 @@ class ScientificPipelineTests(unittest.TestCase):
         e = build_episodes(self.alerts([1, 3], [0, 5]), self.task)[0]
         self.assertEqual((e["first_severity"], e["maximum_severity"], e["constituent_count"]), (1, 3, 2))
         self.assertEqual(event_time(e, [3]), self.start + timedelta(minutes=5))
-        self.assertEqual(as_time(e["escalation_recorded_at"]), self.start + timedelta(minutes=5))
+        self.assertEqual(as_time(e["first_level3_alarm_at"]), self.start + timedelta(minutes=5))
 
     def test_level2_escalation_and_later_downgrade(self):
         e = build_episodes(self.alerts([2, 3, 1], [0, 5, 10]), self.task)[0]

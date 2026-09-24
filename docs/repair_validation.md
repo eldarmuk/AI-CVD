@@ -1,3 +1,5 @@
+> Historical audit before researcher attestation. The current retrospective alarm-initiation endpoint and support policy are defined in `docs/study_protocol.md` (task v2.1). Severity need not have been known at alarm initiation to define a retrospective outcome.
+
 # Problems 1–6 implementation and validation
 
 ## Implemented scope
