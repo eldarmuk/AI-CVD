@@ -42,6 +42,7 @@ def validate(run, task):
     input_valid={s:np.zeros(len(FEATURE_NAMES),np.int64) for s in counts}
     positive_leads={s:[] for s in counts}
     episode_windows={s:{} for s in counts}
+    observed_window_hist={s:{f:np.zeros(task.sequence_steps+1,np.int64) for f in list(PHYSIOLOGY)+['any_physiology']} for s in counts}
     minute=60*10**9; names=list(FEATURE_NAMES)
     norm_n=np.zeros(len(names),np.int64); norm_sum=np.zeros(len(names)); norm_ss=np.zeros(len(names))
     begun=time.monotonic()
@@ -119,6 +120,12 @@ def validate(run, task):
             np.add.at(window_weights,ends-task.sequence_steps+1,1);np.add.at(window_weights,ends+1,-1)
             window_weights=np.cumsum(window_weights[:-1])
             input_valid[split]+=np.sum(np.isfinite(X)*window_weights[:,None],axis=0)
+            observed=np.isfinite(X[:,[names.index(f) for f in PHYSIOLOGY]])
+            for k,f in enumerate(list(PHYSIOLOGY)+['any_physiology']):
+                available=observed[:,k] if k<len(PHYSIOLOGY) else observed.any(axis=1)
+                prefix=np.r_[0,np.cumsum(available)]
+                observed_counts=prefix[ends+1]-prefix[ends-task.sequence_steps+1]
+                observed_window_hist[split][f]+=np.bincount(observed_counts,minlength=task.sequence_steps+1)
             positive_leads[split].extend(lead[y.astype(bool)].tolist())
             if split!='train':
                 assert not training.any()
@@ -159,6 +166,7 @@ def validate(run, task):
             'checks':['artifact_checksums','patient_isolation','all_sample_ids','lookback_and_censoring','retrospective_alarm_targets',
                       'all_lead_times','mask_and_recency','history_exclusion','training_selection','training_only_normalization','episode_linkage','export_alignment','complete_eligible_stream'],
             'eligible_windows_per_episode_by_split':episode_windows,
+            'observed_bucket_count_per_window_histogram':{s:{f:h.tolist() for f,h in fs.items()} for s,fs in observed_window_hist.items()},
             'input_nonmissing_counts_by_split':{s:dict(zip(names,v.tolist())) for s,v in input_valid.items()},
             'input_cell_denominator_per_feature_by_split':{s:counts[s]['samples']*task.sequence_steps for s in counts},
             'positive_sample_lead_summary_by_split':{s:({'n':len(v),'min':min(v),'p25':float(np.quantile(v,.25)),'median':float(np.median(v)),

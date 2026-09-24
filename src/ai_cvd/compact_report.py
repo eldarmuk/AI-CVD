@@ -175,6 +175,12 @@ future alarm. It is not lead time to escalation decision or dispatch.
 Denominators count input cells across all eligible 96-row windows, including repeated
 buckets in overlapping histories. Full 59-channel observed counts and denominators
 are in integrity_verification.json; unique patient-grid summaries are in statistics.json.
+The verification also stores each modality's distribution of 0–96 observed buckets
+per window. Windows with no observed physiological/increment value anywhere in the
+eight-hour sequence, by split:
+`{json.dumps({s:h['any_physiology'][0] for s,h in check['observed_bucket_count_per_window_histogram'].items()})}`.
+These windows can still contain counter/source masks and causal recency state;
+the fixed run-in rule does not guarantee dense measurements in later windows.
 Observed zero activity remains distinct from missing activity. Physiological invalid
 values become missing and cannot reset recency. Static/history channels are all
 unknown, with known masks zero.
