@@ -65,6 +65,15 @@ def validate(run, task):
             run_in=(bucket_start>=pd.Timestamp(c['support_start']).value)&(bucket_start+task.grid_minutes*minute<=pd.Timestamp(c['support_start']).value+task.run_in_minutes*minute)
             assert X[run_in,names.index('observed_heartrate')].sum()>=task.min_valid_hr_per_run_in
             assert X[run_in,names.index('observed_pulse_pressure')].sum()>=task.min_valid_bp_per_run_in
+            end_ns=pd.Timestamp(c['measurement_coverage_end']).floor(f'{task.grid_minutes}min').value
+            assert len(X)==(end_ns-origin)//(task.grid_minutes*minute)
+            all_t=bucket_start+task.grid_minutes*minute
+            complete=(np.arange(len(X))>=task.sequence_steps-1)&(np.arange(len(X))%task.prediction_stride_steps==0)
+            complete&=all_t-task.lookback_minutes*minute>=pd.Timestamp(c['support_start']).value
+            complete&=all_t>=pd.Timestamp(c['support_start']).value+task.run_in_minutes*minute
+            complete&=all_t>=pd.Timestamp(c['outcome_coverage_start']).value
+            complete&=all_t+task.horizon_minutes*minute<=min(pd.Timestamp(c['measurement_coverage_end']).value,pd.Timestamp(c['outcome_coverage_end']).value)
+            assert np.array_equal(ends,np.flatnonzero(complete)),'Stream is not the complete eligible grid'
             for j in sorted(set([0,len(ends)//2,len(ends)-1])):
                 rows=np.arange(ends[j]-task.sequence_steps+1,ends[j]+1)
                 assert len(rows)==96 and bucket_start[rows[0]]==t[j]-task.lookback_minutes*minute
@@ -99,6 +108,13 @@ def validate(run, task):
             for f in STATIC:
                 assert np.isnan(X[:,names.index(f)]).all() and (X[:,names.index('known_'+f)]==0).all()
             training=z['training'].astype(bool)
+            expected_training=t-task.lookback_minutes*minute>=pd.Timestamp(c['outcome_coverage_start']).value
+            actual_alarms=[pd.Timestamp(m['timestamp']).value for e in episodes.get(sid,[]) for m in e['constituents'] if m['severity'] in task.training_excluded_severities]
+            for at in actual_alarms:
+                expected_training&=~((t-task.lookback_minutes*minute<=at)&(at<=t+task.horizon_minutes*minute))
+            if split!='train' or (task.training_policy=='never_event_patients' and actual_alarms):
+                expected_training[:]=False
+            assert np.array_equal(training,expected_training),'Training selection differs from declared policy'
             window_weights=np.zeros(len(X)+1,np.int64)
             np.add.at(window_weights,ends-task.sequence_steps+1,1);np.add.at(window_weights,ends+1,-1)
             window_weights=np.cumsum(window_weights[:-1])
@@ -141,7 +157,7 @@ def validate(run, task):
     assert training_export['samples']==counts['train']['training_samples']
     result={'status':'passed','task_identifier':task.identifier,'counts':counts,
             'checks':['artifact_checksums','patient_isolation','all_sample_ids','lookback_and_censoring','retrospective_alarm_targets',
-                      'all_lead_times','mask_and_recency','history_exclusion','training_selection','training_only_normalization','episode_linkage','export_alignment'],
+                      'all_lead_times','mask_and_recency','history_exclusion','training_selection','training_only_normalization','episode_linkage','export_alignment','complete_eligible_stream'],
             'eligible_windows_per_episode_by_split':episode_windows,
             'input_nonmissing_counts_by_split':{s:dict(zip(names,v.tolist())) for s,v in input_valid.items()},
             'input_cell_denominator_per_feature_by_split':{s:counts[s]['samples']*task.sequence_steps for s in counts},
