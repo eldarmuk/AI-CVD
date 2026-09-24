@@ -143,6 +143,7 @@ contribute to both event-specific counts, but only once to positive-window preva
 Unclassified/unknown-note alarm records by source partition:
 `{json.dumps({s:v.get('unclassified_alarm_records',0) for s,v in stats['splits'].items()})}`.
 These are not evidence of health; classification sensitivity requires clinical review.
+Independent raw-source alarm reconciliation: `{json.dumps(steps['source_alarm_reconciliation'])}`.
 
 ## Exclusions and cohort flow
 

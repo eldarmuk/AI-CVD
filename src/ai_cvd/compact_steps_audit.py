@@ -6,7 +6,8 @@ from pathlib import Path
 import sqlite3
 import numpy as np
 import pandas as pd
-from .cli import file_hash
+from .cli import file_hash, localize, read_jsonl
+from .episodes import build_episodes
 from .features import FEATURE_NAMES
 from .task import load_task
 
@@ -21,6 +22,20 @@ def audit(run, raw_db, task):
     coverage={r['senior_id']:r for r in map(json.loads,(run/'coverage.jsonl').read_text().splitlines())}
     c=sqlite3.connect(source.resolve().as_uri()+'?mode=ro',uri=True)
     c.execute('PRAGMA query_only=ON')
+    patients={str(r[0]) for r in c.execute('SELECT id FROM seniors')}
+    alerts=[];orphans=0
+    for row in c.execute('SELECT alert_id,senior_id,alert_date,sos_note FROM alerts WHERE alert_date>=? AND alert_date<? ORDER BY senior_id,alert_date,alert_id',(task.study_start_local.replace('T',' '),task.study_end_local_exclusive.replace('T',' '))):
+        if str(row[1]) not in patients:
+            orphans+=1
+            continue
+        a=dict(zip(('alert_id','senior_id','alert_date','sos_note'),row))
+        a['senior_id']=str(a['senior_id']);a['alert_date']=localize(a['alert_date'],contract);alerts.append(a)
+    expected=sorted(build_episodes(alerts,task),key=lambda e:e['episode_id'])
+    actual=sorted(read_jsonl(run/'episodes.jsonl'),key=lambda e:e['episode_id'])
+    assert expected==actual,'Episodes do not reconcile with source alarms'
+    statistics=json.loads((run/'statistics.json').read_text())
+    assert sum(s['source_patients'] for s in statistics['splits'].values())==len(patients)
+    assert sum(s['raw_alarm_records'] for s in statistics['splits'].values())==len(alerts)
     totals=Counter();by_split={s:Counter() for s in ('train','validation','test')}
     for number,shard in enumerate(meta['patient_shards']):
         sid=shard['senior_id'];support=coverage[sid]
@@ -62,7 +77,8 @@ def audit(run, raw_db, task):
     c.close()
     assert before==(source.stat().st_size,source.stat().st_mtime_ns)
     result={'status':'passed','scope':'all eligible patient shards; raw snapshots within study slice, increments within analysis support',
-            'totals':totals,'by_split':by_split,'run_metadata_sha256':file_hash(run/'run_metadata.json')}
+            'totals':totals,'by_split':by_split,'source_alarm_reconciliation':{'matched_records':len(alerts),'matched_episodes':len(actual),'orphan_alarm_records_without_patient_table_entry':orphans},
+            'run_metadata_sha256':file_hash(run/'run_metadata.json')}
     with open(run/'steps_verification.json','x') as f:
         json.dump(result,f,indent=2)
     return result
