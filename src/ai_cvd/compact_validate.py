@@ -33,6 +33,7 @@ def validate(run, task):
         for name,digest in recovery['existing_shards_sha256'].items():
             assert meta['artifacts_sha256']['patients/'+name]==digest,'Recovered shard was modified'
     coverage={r['senior_id']:r for r in read_jsonl(run/'coverage.jsonl')}
+    assert {str(p.relative_to(run)).replace('\\','/') for p in (run/'patients').glob('*.npz')}=={s['file'] for s in meta['patient_shards']},'Unreferenced or missing patient shard'
     episodes={}
     for episode in read_jsonl(run/'episodes.jsonl'):
         episodes.setdefault(episode['senior_id'],[]).append(episode)
@@ -144,7 +145,9 @@ def validate(run, task):
             print(json.dumps({'verified_patients':number+1,'elapsed_seconds':round(time.monotonic()-begun)}),flush=True)
     stats=json.loads((run/'statistics.json').read_text()); normal=json.loads((run/'normalization.json').read_text())
     assert normal['fit_split']=='train' and normal['task_identifier']==task.identifier
+    assert tuple(normal['feature_names'])==FEATURE_NAMES
     assert np.array_equal(norm_n,np.array(normal['count']))
+    assert normal['all_missing_features']==[names[i] for i in np.flatnonzero(norm_n==0)]
     mean=np.divide(norm_sum,norm_n,out=np.zeros_like(norm_sum),where=norm_n>0)
     scale=np.sqrt(np.maximum(0,np.divide(norm_ss,norm_n,out=np.zeros_like(norm_ss),where=norm_n>0)-mean**2));scale[scale==0]=1
     for i,f in enumerate(names):
@@ -160,6 +163,7 @@ def validate(run, task):
         assert export['samples']==counts[split]['samples']
         assert export['shards']==[r for r in meta['patient_shards'] if r['split']==split]
     training_export=json.loads((run/'exports/train-training.json').read_text())
+    assert training_export['task_identifier']==task.identifier and tuple(training_export['feature_names'])==FEATURE_NAMES
     assert training_export['shards']==[r for r in meta['patient_shards'] if r['split']=='train' and r['training_samples']>0]
     assert training_export['samples']==counts['train']['training_samples']
     result={'status':'passed','task_identifier':task.identifier,'counts':counts,
