@@ -43,7 +43,13 @@ def audit(run, raw_db, task):
         raw['value']=pd.to_numeric(raw.value,errors='coerce')
         stats=Counter(patients=1,raw_snapshots=len(raw),invalid_snapshots=int((~raw.value.between(*task.validity['steps'])).sum()))
         valid=raw[raw.value.between(*task.validity['steps'])].copy()
-        assert not (valid.groupby('date').value.nunique()>1).any()
+        conflicts=valid.groupby('date').value.nunique()>1
+        stats['conflicting_timestamps']=int(conflicts.sum())
+        ambiguous=valid.date.isin(conflicts[conflicts].index)
+        stats['conflicting_snapshot_records_excluded']=int(ambiguous.sum())
+        if ambiguous.any() and task.values.get('steps_duplicate_conflict_policy','reject')=='reject':
+            raise ValueError('Conflicting source Steps snapshot')
+        valid=valid[~ambiguous]
         stats['duplicate_valid_snapshots']=int(valid.duplicated('date').sum())
         valid=valid.drop_duplicates('date')
         at=pd.to_datetime(valid.date,format='mixed').dt.tz_localize(contract['source_timezone'],ambiguous='raise',nonexistent='raise').dt.tz_convert('UTC')

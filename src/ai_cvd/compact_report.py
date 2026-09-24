@@ -187,6 +187,10 @@ readings, every local-day boundary and unexpected decreases give unknown activit
 and restart differencing. Invalid readings do not reset the counter. Raw snapshots
 are never summed. Source/reset masks and delta duration are retained; long deltas
 and partial rolling sums are not exact five-minute/six-hour activity totals.
+Task v2.1.1 excludes conflicting valid snapshots at the same timestamp as ambiguous
+missing observations. The interrupted v2.1.0 build stopped on this defect; the explicit
+amendment preserves all completed nonconflicting shards and the old task definition.
+No ambiguous count was selected, averaged or treated as observed zero.
 
 Independent comparison against raw cumulative snapshots passed for all eligible
 patient shards. Audit counts (snapshots/increments/buckets are distinct units):

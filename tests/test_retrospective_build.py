@@ -134,7 +134,8 @@ outcome_completeness="researcher_attestation"
         c.execute('CREATE TABLE measurements(senior_id TEXT,date TEXT,type TEXT,value REAL,sbp REAL,dbp REAL)')
         readings = list(source.measurements(coverages[0]['senior_id']))
         readings += [dict(readings[0], type='BloodPressure',value=None,sbp=120,dbp=None),
-                     dict(readings[0], type='BloodPressure',value=None,sbp=None,dbp=80)]
+                     dict(readings[0], type='BloodPressure',value=None,sbp=None,dbp=80),
+                     dict(readings[0],type='Steps',value=123),dict(readings[0],type='Steps',value=124)]
         c.executemany('INSERT INTO measurements VALUES (?,?,?,?,?,?)',[(r['senior_id'],r['date'],r['type'],r.get('value'),r.get('sbp'),r.get('dbp')) for r in readings])
         clean = read_clean_patient(c,coverages[0]['senior_id'],task,'2029','2031')
         actual = vector_features(clean,coverages[0],task,contract).to_numpy()

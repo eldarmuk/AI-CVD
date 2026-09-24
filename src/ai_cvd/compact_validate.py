@@ -23,7 +23,13 @@ def validate(run, task):
             raise ValueError('Artifact checksum mismatch: '+name)
     for journal in run.glob('interruption-*/recovery.json'):
         recovery=json.loads(journal.read_text())
-        assert recovery['task_identifier']==task.identifier
+        if recovery['task_identifier']!=task.identifier:
+            from .task import Task
+            amendment=json.loads((run/'task_amendment.json').read_text())
+            old,new=amendment['from_task'],amendment['to_task']
+            assert Task(old).identifier==recovery['task_identifier'] and new==task.values
+            assert {k for k in set(old)|set(new) if old.get(k)!=new.get(k)}=={'version','steps_duplicate_conflict_policy'}
+            assert old.get('steps_duplicate_conflict_policy','reject')=='reject' and new['steps_duplicate_conflict_policy']=='exclude_timestamp'
         for name,digest in recovery['existing_shards_sha256'].items():
             assert meta['artifacts_sha256']['patients/'+name]==digest,'Recovered shard was modified'
     coverage={r['senior_id']:r for r in read_jsonl(run/'coverage.jsonl')}

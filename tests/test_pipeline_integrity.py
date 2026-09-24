@@ -79,8 +79,15 @@ class IntegrityTests(unittest.TestCase):
                 SQLiteSource(db, self.contract)
 
     def test_conflicting_duplicate_steps_rejected(self):
+        self.task=Task(dict(self.task.values,steps_duplicate_conflict_policy='reject')).validate()
         with self.assertRaisesRegex(ValueError, 'Conflicting'):
             self.features([self.measurement(3, value=10), self.measurement(3, value=11)])
+
+    def test_conflicting_duplicate_steps_are_missing_under_declared_policy(self):
+        rows=self.features([self.measurement(3, value=10), self.measurement(3, value=11)])
+        self.assertIsNone(rows[0]['steps'])
+        self.assertEqual(rows[0]['observed_steps_source'],0)
+        self.assertIsNone(rows[0]['time_since_last_steps'])
 
     def test_acquisition_and_delivery_exact_bucket_boundaries(self):
         rows = self.features([self.measurement(5, 'Heartrate', value=80)])

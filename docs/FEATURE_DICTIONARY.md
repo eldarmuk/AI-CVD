@@ -26,8 +26,11 @@ and missingness. No imputation is applied.
 Validity bounds are inclusive and live in the canonical task config. Nonfinite,
 unparseable and out-of-range values become NULL; they are not clipped to plausible
 extremes. Exact patient/time/type duplicates are consolidated before bucketing.
-For physiological values the mean of valid duplicates is used. Conflicting step
-values at exactly the same time are rejected. Every invalid channel remains missing
+For physiological values the mean of valid duplicates is used. Under task v2.1.1,
+conflicting valid step values at exactly the same time are excluded as an ambiguous
+snapshot: neither value nor their mean is used, and they do not reset the counter
+or recency. Strict `reject` remains an explicit alternative policy; v2.1.0 stopped
+on these conflicts. Every invalid channel remains missing
 and cannot reset its valid-observation timer. Inverted BP pairs nullify both values.
 
 | Feature | Units | Definition |

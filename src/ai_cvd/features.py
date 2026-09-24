@@ -126,7 +126,9 @@ def build_features(measurements, coverage, histories, task, contract):
         for name in clean[0]:
             vals = [r[name] for r in clean if r[name] is not None]
             if name == "steps" and len(set(vals)) > 1:
-                raise ValueError("Conflicting step values at identical timestamp; resolve source duplicates")
+                if task.values.get('steps_duplicate_conflict_policy','reject')=='reject':
+                    raise ValueError("Conflicting step values at identical timestamp; resolve source duplicates")
+                vals=[]  # Ambiguous source snapshot is unavailable, never averaged.
             combined[name] = statistics.mean(vals) if vals else None
         # PP above averages only valid raw pairs, never independently combined components.
         if kind == "Steps" and combined["steps"] is not None:

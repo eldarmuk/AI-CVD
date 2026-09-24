@@ -1,9 +1,15 @@
-# Retrospective recorded-alarm prediction protocol — task v2.1
+# Retrospective recorded-alarm prediction protocol — task v2.1.1
 
 `configs/tasks/level3_4h.toml` is authoritative: five-minute grid, 96 rows/eight-hour
 lookback, four-hour horizon, primary Level 3. Version 2.1 explicitly changes the
 endpoint clock and support policy. Previous results and v2.0 blocked audits are
 historical; `docs/archive/study_protocol_v2.0.md` preserves the previous protocol.
+
+The v2.1.1 amendment excludes conflicting valid cumulative snapshots at an identical
+timestamp as missing. It never chooses or averages those counters. This fixes a
+source ambiguity on which v2.1.0 correctly stopped; endpoint, sampling, intervals
+and split are unchanged. The interrupted run records its explicit task amendment
+and preserves existing nonconflicting shards byte-for-byte for independent checking.
 
 ## Retrospective endpoint
 

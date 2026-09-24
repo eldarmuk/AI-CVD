@@ -28,6 +28,8 @@ class Task:
         return f"{self.task_id}@{self.version}:{self.fingerprint}"
 
     def validate(self):
+        if self.values.get('steps_duplicate_conflict_policy','reject') not in {'reject','exclude_timestamp'}:
+            raise ValueError('Unknown conflicting Steps snapshot policy')
         if self.grid_minutes * self.sequence_steps != self.lookback_minutes:
             raise ValueError("grid_minutes * sequence_steps must equal lookback_minutes")
         if (self.grid_minutes, self.sequence_steps, self.lookback_minutes, self.horizon_minutes) != (5, 96, 480, 240):

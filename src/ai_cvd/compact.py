@@ -167,9 +167,15 @@ def patient_job(raw_db, sid, number, task, contract, output, recovered_coverage=
         return result
     X=frame.to_numpy(dtype=np.float32)
     times=frame.index[index['end_rows']]+pd.Timedelta(minutes=task.grid_minutes)
-    identity=np.array([list(bytes.fromhex(sample_id(sid,t.to_pydatetime()).removeprefix('sample_'))) for t in times],dtype=np.uint8)
-    if len(np.unique(identity,axis=0)) != len(identity):
-        raise ValueError('Duplicate sample IDs')
+    if existing.exists():
+        prefix='['+json.dumps(str(sid))+',"'
+        stamps=times.asi8.view('datetime64[ns]').astype('datetime64[s]').astype(str)
+        identity=np.frombuffer(b''.join(hashlib.sha256((prefix+stamp+'Z"]').encode()).digest() for stamp in stamps),dtype=np.uint8).reshape(-1,32)
+        assert times.is_unique
+    else:
+        identity=np.array([list(bytes.fromhex(sample_id(sid,t.to_pydatetime()).removeprefix('sample_'))) for t in times],dtype=np.uint8)
+        if len(np.unique(identity,axis=0)) != len(identity):
+            raise ValueError('Duplicate sample IDs')
     if split!='train':
         index['training'][:]=0
     stats['training_samples']=int(index['training'].sum())

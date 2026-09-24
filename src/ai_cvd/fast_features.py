@@ -24,9 +24,12 @@ def read_clean_patient(connection, sid, task, start, end):
     frame['pulse_pressure'] = (frame.sbp-frame.dbp).where(frame.sbp-frame.dbp >= task.pulse_pressure_min)
     grouped = frame.groupby(['date','type'],sort=True)
     extremes = grouped.steps.agg(['min','max'])
-    if ((extremes['min'] != extremes['max']) & extremes['min'].notna()).any():
+    conflict=(extremes['min'] != extremes['max']) & extremes['min'].notna()
+    if conflict.any() and task.values.get('steps_duplicate_conflict_policy','reject')=='reject':
         raise ValueError('Conflicting step values at identical timestamp')
-    return grouped[list(PHYSIOLOGY)].mean().reset_index()
+    result=grouped[list(PHYSIOLOGY)].mean()
+    result.loc[conflict,'steps']=np.nan
+    return result.reset_index()
 
 
 

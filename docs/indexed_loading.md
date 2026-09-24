@@ -46,5 +46,8 @@ channels are unavailable, not known negative clinical histories.
 For interrupted builds only, `compact --resume-interrupted` verifies/reuses existing
 shards, recomputes their labels/IDs and aggregates training statistics, and preserves
 partial audit files plus original shard checksums in an interruption subdirectory.
-It refuses completed runs and contract changes. Do not use this option to change a
-task or experiment. Immutable completed outputs are never overwritten.
+It refuses completed runs and contract changes. A narrowly scoped, explicitly
+recorded v2.1.0-to-v2.1.1 amendment can exclude ambiguous Steps timestamps; verification
+requires all previously completed shards to remain byte-identical and validates the
+amendment's exact configuration differences. Other experiment changes require a new
+run. Immutable completed outputs are never overwritten.
