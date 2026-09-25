@@ -32,6 +32,10 @@ Historical results are not evidence for this repaired task. Training and evaluat
 scripts are explicitly retired pending migration; this repair does not change model
 architecture, train models, or select thresholds.
 
+Before implementing a model, read the [architecture-selection memo](docs/architecture_selection.md).
+It recommends a small observation-aware masked temporal encoder and a bounded
+training/validation comparison; this is a literature-based proposal, not a trained winner.
+
 ## Quick synthetic verification
 
 Python 3.11+ is required. The scalar reference uses the standard library; compact builds/tests require NumPy and pandas. Use `requirements-data.txt`
