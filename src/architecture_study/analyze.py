@@ -81,7 +81,8 @@ def analyze(run):
     output = run/'analysis'; output.mkdir(exist_ok=False)
     write_json(output/'analysis_provenance.json', {'git_commit': subprocess.check_output(['git','rev-parse','HEAD'], cwd=ROOT, text=True).strip(),
                'analysis_source_sha256': digest(Path(__file__)), 'bootstrap_seed': 20260926, 'bootstrap_repeats': 500,
-               'diagnostic_probability_threshold': .5, 'study_config_sha256': fingerprint(c)})
+               'diagnostic_probability_threshold': .5, 'study_config_sha256': fingerprint(c),
+               'artifact_manifest_exclusion': '*.log console logs may still be receiving output'})
     store = TrainingStore(ROOT/c['canonical_run'], task)
     provenance = json.loads((run/'canonical_provenance.json').read_text())
     if store.run_hash != provenance['run_metadata_sha256'] or store.export_hash != provenance['train_export_sha256']:
@@ -91,6 +92,7 @@ def analyze(run):
     all_vital = []
     fold_audits = []
     for fold in range(3):
+        print(f'Analyzing training holdout fold {fold}', flush=True)
         folder = run/f'fold-{fold}'
         saved = json.loads((folder/'patients.json').read_text())
         scope = Scope(frozenset(saved['fit']+saved['held']), frozenset(saved['fit']), frozenset(saved['held']), fold)
@@ -146,6 +148,7 @@ def analyze(run):
                     'process_only': (embeddings['R0'][0][:,32:], embeddings['R0'][1][:,32:]),
                     'R0_value_access': (embeddings['R0'][0][:,list(range(32))+[57,58]], embeddings['R0'][1][:,list(range(32))+[57,58]])}
         for name, (fit_z, held_z) in controls.items():
+            print(f'Fold {fold}: fitting predefined frozen-head control {name}', flush=True)
             random_risk.head = torch.nn.Linear(fit_z.shape[1], 1)
             fitted = fit_head(random_risk, torch.tensor(fit_z), torch.tensor(fit_y), fit_w,
                 [r['patient'] for r in fit_refs], scope, c['optimization']['head_l2'], c['resources']['head_iterations'])
@@ -165,10 +168,12 @@ def analyze(run):
             'positive_assessment_windows': int(y.sum()), 'held_positive_patients': len({p for p,label in zip(patients,y) if label}),
             'linked_assessment_episodes': len({e for r in held_refs for e in r['episode_group'] if e != 'negative'}),
             'no_vital_assessment_windows': int((~vitals).sum()), 'no_primitive_assessment_windows': int((~primitive).sum())})
+        print(f'Fold {fold}: analysis artifacts saved', flush=True)
     bootstrap = paired_bootstrap(all_y, all_scores['R0'], all_scores['R1'], all_w, all_patients)
     aggregate = {name: metrics(all_y, scores, all_w) for name,scores in all_scores.items()}
     write_json(output/'comparison.json', {'rows': rows, 'fold_audits': fold_audits, 'pooled': aggregate, 'paired_bootstrap': bootstrap})
-    write_json(output/'artifacts_sha256.json', {str(p.relative_to(run)): digest(p) for p in sorted(run.rglob('*')) if p.is_file()})
+    write_json(output/'artifacts_sha256.json', {str(p.relative_to(run)): digest(p) for p in sorted(run.rglob('*'))
+               if p.is_file() and p.suffix.lower() != '.log'})
     print('Training-fold analysis complete. Private reports saved under analysis/.')
 
 
