@@ -70,8 +70,14 @@ def analyze(run):
     if fingerprint(c) != study['config_sha256'] or json.loads((run/'complete.json').read_text())['status'] != 'complete':
         raise ValueError('Incomplete or modified study')
     for name, expected in study.get('implementation_sha256', {}).items():
+        name = name.replace('\\', '/')
         if digest(ROOT/name) != expected:
-            raise ValueError('Training implementation changed after run launch')
+            receipts = [json.loads(p.read_text()) for p in run.glob('resume-*.json')]
+            allowed_resume = name == 'src/architecture_study/cli.py' and any(
+                r['original_study_sha256'] == digest(run/'study.json') and r['original_cli_sha256'] == expected
+                and r['resume_cli_sha256'] == digest(ROOT/name) and r['config_sha256'] == fingerprint(c) for r in receipts)
+            if not allowed_resume:
+                raise ValueError('Training implementation changed without a compatible resume record')
     output = run/'analysis'; output.mkdir(exist_ok=False)
     write_json(output/'analysis_provenance.json', {'git_commit': subprocess.check_output(['git','rev-parse','HEAD'], cwd=ROOT, text=True).strip(),
                'analysis_source_sha256': digest(Path(__file__)), 'bootstrap_seed': 20260926, 'bootstrap_repeats': 500,

@@ -18,6 +18,7 @@ from .synthetic import tensors
 from .training import make_model, view_for, ssl_step, embed_refs, fit_head, development_metrics
 from .artifacts import save_checkpoint
 from .telemetry import peak_rss
+from .resume import completed_model, saved_fold, record_resume
 
 
 def environment(device):
@@ -111,33 +112,45 @@ def loader_smoke(c, task, store, scopes, output, device):
     print('TRAIN-only loader smoke complete; private identities/provenance saved in output directory.')
 
 
-def run(c, task, store, scopes, output, device):
+def run(c, task, store, scopes, output, device, resume=False):
     """Six bounded fits. This entry point is never called by smoke/benchmark commands."""
     r, opt = c['resources'], c['optimization']
     for scope in scopes:
         print(f'Preparing fold {scope.fold}', flush=True)
-        folder = output / f'fold-{scope.fold}'; folder.mkdir()
-        write_json(folder/'patients.json', {'fit': sorted(scope.fit), 'held': sorted(scope.held), 'scope': scope.identifier})
-        sampler = BlockSampler(store, scope, 'scaler', c['seed'] + scope.fold, c['sampling'])
-        scaler_refs = []
-        while len(scaler_refs) < r['scaler_windows']:
-            scaler_refs.extend(sampler.draw(r['batch_size']))
-        scaler_refs = scaler_refs[:r['scaler_windows']]
-        scaler = fit_scaler(store, scaler_refs, scope)
-        write_json(folder/'scaler.json', scaler); write_json(folder/'scaler_samples.json', scaler_refs)
-        # One paired plan and corruption seed per fold, shared by R0 and R1.
-        sampler = BlockSampler(store, scope, 'ssl', c['seed'] + scope.fold + 100, c['sampling'])
-        plan = [sampler.draw(r['batch_size']) for _ in range(r['ssl_updates'])]
-        write_json(folder/'ssl_sampling.json', plan)
-        checkpoint_sampler = BlockSampler(store, scope, 'checkpoint', c['seed'] + scope.fold + 200, c['sampling'])
-        checkpoint_refs = [checkpoint_sampler.draw(r['batch_size']) for _ in range(r['checkpoint_batches'])]
-        write_json(folder/'checkpoint_samples.json', checkpoint_refs)
-        head_refs = supervised_refs(store, scope, 'head', c['seed'], r)
-        assessment_refs = supervised_refs(store, scope, 'assessment', c['seed'], r)
-        write_json(folder/'head_samples.json', head_refs); write_json(folder/'assessment_samples.json', assessment_refs)
-        write_json(folder/'plan_hashes.json', {name: digest(folder/name) for name in ('patients.json', 'scaler_samples.json', 'ssl_sampling.json', 'checkpoint_samples.json', 'head_samples.json', 'assessment_samples.json')})
+        folder = output / f'fold-{scope.fold}'
+        if resume and folder.exists():
+            scaler, plan, checkpoint_refs, head_refs, assessment_refs = saved_fold(folder, scope, c)
+        else:
+            folder.mkdir()
+            write_json(folder/'patients.json', {'fit': sorted(scope.fit), 'held': sorted(scope.held), 'scope': scope.identifier})
+            sampler = BlockSampler(store, scope, 'scaler', c['seed'] + scope.fold, c['sampling'])
+            scaler_refs = []
+            while len(scaler_refs) < r['scaler_windows']:
+                scaler_refs.extend(sampler.draw(r['batch_size']))
+            scaler_refs = scaler_refs[:r['scaler_windows']]
+            scaler = fit_scaler(store, scaler_refs, scope)
+            write_json(folder/'scaler.json', scaler); write_json(folder/'scaler_samples.json', scaler_refs)
+            # One paired plan and corruption seed per fold, shared by R0 and R1.
+            sampler = BlockSampler(store, scope, 'ssl', c['seed'] + scope.fold + 100, c['sampling'])
+            plan = [sampler.draw(r['batch_size']) for _ in range(r['ssl_updates'])]
+            write_json(folder/'ssl_sampling.json', plan)
+            checkpoint_sampler = BlockSampler(store, scope, 'checkpoint', c['seed'] + scope.fold + 200, c['sampling'])
+            checkpoint_refs = [checkpoint_sampler.draw(r['batch_size']) for _ in range(r['checkpoint_batches'])]
+            write_json(folder/'checkpoint_samples.json', checkpoint_refs)
+            head_refs = supervised_refs(store, scope, 'head', c['seed'], r)
+            assessment_refs = supervised_refs(store, scope, 'assessment', c['seed'], r)
+            write_json(folder/'head_samples.json', head_refs); write_json(folder/'assessment_samples.json', assessment_refs)
+            write_json(folder/'plan_hashes.json', {name: digest(folder/name) for name in ('patients.json', 'scaler_samples.json', 'ssl_sampling.json', 'checkpoint_samples.json', 'head_samples.json', 'assessment_samples.json')})
         paired_digest = None
         for recipe in c['recipes']:
+            if resume:
+                finished = completed_model(folder, recipe, c, scaler)
+                if finished is not None:
+                    if paired_digest is not None and paired_digest != finished:
+                        raise ValueError('Completed R0/R1 pairing mismatch')
+                    paired_digest = finished
+                    print(f'Skipping verified fold {scope.fold} / {recipe}', flush=True)
+                    continue
             torch.manual_seed(c['seed'] + scope.fold)
             model = make_model(recipe, c, device)
             if recipe == 'R0':
@@ -210,8 +223,12 @@ def run(c, task, store, scopes, output, device):
                        'sample_corruption_sha256': corruption_hash,
                        'sample_ids': held_ids, 'scores': scores, 'labels': held_y.tolist(), 'episodes': held_episodes})
             save_checkpoint(folder/f'{recipe}-risk.pt', risk.cpu(), recipe, c, scaler, 'risk')
-    write_json(output/'complete.json', {'status': 'complete', 'scope': 'grouped canonical TRAIN only',
+            completed_model(folder, recipe, c, scaler, adopt=True)
+            print(f'Completed and verified fold {scope.fold} / {recipe}', flush=True)
+    if not (output/'complete.json').exists():
+        write_json(output/'complete.json', {'status': 'complete', 'scope': 'grouped canonical TRAIN only',
                'caution': 'Development screen only; no natural-stream operational metrics or final architecture decision'})
+    print('Bounded study complete: complete.json and six verified model markers are present.', flush=True)
 
 
 def main():
@@ -220,6 +237,7 @@ def main():
     parser.add_argument('--config', default=str(DEFAULT_CONFIG))
     parser.add_argument('--output', required=True)
     parser.add_argument('--device', choices=['cpu', 'cuda'], default='cpu')
+    parser.add_argument('--resume', action='store_true', help='Skip verified completed fits; refuse partial or changed artifacts')
     args = parser.parse_args()
     c, task = load_config(args.config)
     os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
@@ -228,19 +246,39 @@ def main():
     if device.type == 'cuda' and not torch.cuda.is_available():
         raise ValueError('CUDA unavailable')
     torch.use_deterministic_algorithms(True)
-    output = private_output(args.output)
-    write_json(output/'study.json', {'config': c, 'config_sha256': fingerprint(c), 'environment': environment(device),
+    if args.resume:
+        if args.command != 'run':
+            raise ValueError('Resume is supported only for run')
+        from pathlib import Path
+        output = Path(args.output).resolve()
+        if not output.is_relative_to((ROOT/'runs/model_studies').resolve()):
+            raise ValueError('Resume path outside private study root')
+        saved_config, _ = load_config(output/'config.toml')
+        if fingerprint(saved_config) != fingerprint(c):
+            raise ValueError('Saved study config differs from requested config')
+        record_resume(output, c, device)
+    else:
+        output = private_output(args.output)
+        write_json(output/'study.json', {'config': c, 'config_sha256': fingerprint(c), 'environment': environment(device),
                                   'git_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                                   'implementation_sha256': {str(p.relative_to(ROOT)): digest(p) for p in sorted((ROOT/'src/architecture_study').glob('*.py'))},
                                   'created_utc': datetime.now(timezone.utc).isoformat(), 'command': args.command})
-    shutil.copyfile(args.config, output/'config.toml')
+        shutil.copyfile(args.config, output/'config.toml')
     if args.command == 'benchmark':
         benchmark(c, task, output, device)
     else:
         store = TrainingStore(ROOT/c['canonical_run'], task, c['sampling']['cache_patients'], c['sampling']['cache_megabytes'])
         scopes = grouped_folds(store.shards, c['seed'], c['folds'])
-        write_json(output/'canonical_provenance.json', {'run_metadata_sha256': store.run_hash, 'train_export_sha256': store.export_hash})
-        (loader_smoke if args.command == 'loader-smoke' else run)(c, task, store, scopes, output, device)
+        provenance = {'run_metadata_sha256': store.run_hash, 'train_export_sha256': store.export_hash}
+        if args.resume:
+            if json.loads((output/'canonical_provenance.json').read_text()) != provenance:
+                raise ValueError('Canonical provenance changed')
+        else:
+            write_json(output/'canonical_provenance.json', provenance)
+        if args.command == 'loader-smoke':
+            loader_smoke(c, task, store, scopes, output, device)
+        else:
+            run(c, task, store, scopes, output, device, resume=args.resume)
 
 
 if __name__ == '__main__':
