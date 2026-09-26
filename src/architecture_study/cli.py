@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 import json
 import os
 import platform
+import subprocess
+import shutil
 import time
 import numpy as np
 import torch
@@ -15,6 +17,7 @@ from .projection import project, mask_observed
 from .synthetic import tensors
 from .training import make_model, view_for, ssl_step, embed_refs, fit_head, development_metrics
 from .artifacts import save_checkpoint
+from .telemetry import peak_rss
 
 
 def environment(device):
@@ -112,6 +115,7 @@ def run(c, task, store, scopes, output, device):
     """Six bounded fits. This entry point is never called by smoke/benchmark commands."""
     r, opt = c['resources'], c['optimization']
     for scope in scopes:
+        print(f'Preparing fold {scope.fold}', flush=True)
         folder = output / f'fold-{scope.fold}'; folder.mkdir()
         write_json(folder/'patients.json', {'fit': sorted(scope.fit), 'held': sorted(scope.held), 'scope': scope.identifier})
         sampler = BlockSampler(store, scope, 'scaler', c['seed'] + scope.fold, c['sampling'])
@@ -131,14 +135,32 @@ def run(c, task, store, scopes, output, device):
         head_refs = supervised_refs(store, scope, 'head', c['seed'], r)
         assessment_refs = supervised_refs(store, scope, 'assessment', c['seed'], r)
         write_json(folder/'head_samples.json', head_refs); write_json(folder/'assessment_samples.json', assessment_refs)
+        write_json(folder/'plan_hashes.json', {name: digest(folder/name) for name in ('patients.json', 'scaler_samples.json', 'ssl_sampling.json', 'checkpoint_samples.json', 'head_samples.json', 'assessment_samples.json')})
         paired_digest = None
         for recipe in c['recipes']:
             torch.manual_seed(c['seed'] + scope.fold)
             model = make_model(recipe, c, device)
+            if recipe == 'R0':
+                save_checkpoint(folder/'R0-random-ssl.pt', model, recipe, c, scaler, 'ssl')
             optimizer = torch.optim.Adam(model.parameters(), lr=opt['ssl_lr'])
             generator = torch.Generator(device=device).manual_seed(c['seed'] + scope.fold + 300)
             best, best_state, history = float('inf'), None, []
             updates = 0
+            started = time.perf_counter()
+            draws = []
+            def checkpoint_loss():
+                check = []
+                model.eval()
+                fixed = torch.Generator(device=device).manual_seed(c['seed'] + scope.fold + 400)
+                with torch.no_grad():
+                    for refs_check in checkpoint_refs:
+                        v = view_for(store.batch(refs_check, scope, 'checkpoint'), scaler, task, device, fixed)
+                        if v.A.any():
+                            check.append(float(masked_huber(model(v), v)))
+                if not check:
+                    raise ValueError('No valid held-training-fold SSL targets; selection infeasible')
+                return float(np.mean(check))
+            initial_held_loss = checkpoint_loss()
             corruptions = hashlib.sha256()
             for step, refs in enumerate(plan, 1):
                 batch = store.batch(refs, scope, 'ssl')
@@ -148,18 +170,13 @@ def run(c, task, store, scopes, output, device):
                 model.train()
                 loss, targets = ssl_step(model, optimizer, view, opt['gradient_clip'], opt['huber_delta'])
                 updates += int(targets > 0)
+                draws.append({'draw': step, 'loss': loss, 'targets': targets, 'windows': len(refs),
+                              'zero_target_windows': int((~view.A.flatten(1).any(1)).sum()),
+                              'no_primitive_windows': int((~view.M.flatten(1).any(1)).sum())})
                 if step % r['checkpoint_every'] == 0 or step == len(plan):
-                    model.eval(); check = []
-                    fixed = torch.Generator(device=device).manual_seed(c['seed'] + scope.fold + 400)
-                    with torch.no_grad():
-                        for refs_check in checkpoint_refs:
-                            v = view_for(store.batch(refs_check, scope, 'checkpoint'), scaler, task, device, fixed)
-                            if v.A.any():
-                                check.append(float(masked_huber(model(v), v)))
-                    if not check:
-                        raise ValueError('No valid held-training-fold SSL targets; selection infeasible')
-                    score = float(np.mean(check))
+                    score = checkpoint_loss()
                     history.append({'draw': step, 'optimizer_updates': updates, 'train_loss': loss, 'inner_ssl_loss': score})
+                    print(json.dumps({'fold': scope.fold, 'recipe': recipe, 'draw': step, 'seconds': round(time.perf_counter()-started)}), flush=True)
                     if score < best:
                         best = score; best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             if updates == 0 or best_state is None:
@@ -168,6 +185,14 @@ def run(c, task, store, scopes, output, device):
             if paired_digest is not None and paired_digest != corruption_hash:
                 raise AssertionError('R0/R1 sample/corruption pairing failed')
             paired_digest = corruption_hash
+            seconds = time.perf_counter()-started
+            write_json(folder/f'{recipe}-telemetry.json', {'draws': draws, 'initial_held_loss': initial_held_loss,
+                'ssl_wall_seconds': seconds, 'windows_per_second': sum(d['windows'] for d in draws)/seconds,
+                'process_cumulative_peak_rss_bytes': peak_rss(), 'optimizer_updates': updates,
+                'unique_samples': len({r['sample_id'] for refs in plan for r in refs}),
+                'exposed_patients': len({r['patient'] for refs in plan for r in refs}),
+                'checkpoint_criterion': 'minimum mean fixed inner-held SSL batch loss at scheduled checkpoints; earliest tie',
+                'selected_draw': min(history, key=lambda h:h['inner_ssl_loss'])['draw']})
             model.load_state_dict(best_state)
             save_checkpoint(folder/f'{recipe}-ssl.pt', model, recipe, c, scaler, 'ssl')
             risk, z, y, ids, episodes = embed_refs(model, store, head_refs, scope, 'head', scaler, device, r['batch_size'])
@@ -177,6 +202,8 @@ def run(c, task, store, scopes, output, device):
             with torch.no_grad():
                 scores = risk.head(held_z.to(device)).squeeze(-1).sigmoid().cpu().tolist()
             weights = [1/r['inclusion_probability'] for r in assessment_refs]
+            np.savez_compressed(folder/f'{recipe}-embeddings.npz', fit=z.numpy(), held=held_z.numpy(),
+                                fit_ids=np.asarray(ids), held_ids=np.asarray(held_ids))
             metrics = development_metrics(held_y.tolist(), scores, weights)
             metrics['unique_linked_episodes'] = len({e for es in held_episodes for e in es})
             write_json(folder/f'{recipe}-development.json', {'history': history, 'head': fitted, 'metrics': metrics,
@@ -203,8 +230,10 @@ def main():
     torch.use_deterministic_algorithms(True)
     output = private_output(args.output)
     write_json(output/'study.json', {'config': c, 'config_sha256': fingerprint(c), 'environment': environment(device),
+                                  'git_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                                   'implementation_sha256': {str(p.relative_to(ROOT)): digest(p) for p in sorted((ROOT/'src/architecture_study').glob('*.py'))},
                                   'created_utc': datetime.now(timezone.utc).isoformat(), 'command': args.command})
+    shutil.copyfile(args.config, output/'config.toml')
     if args.command == 'benchmark':
         benchmark(c, task, output, device)
     else:
