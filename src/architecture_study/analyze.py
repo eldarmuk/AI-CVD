@@ -69,6 +69,9 @@ def analyze(run):
     study = json.loads((run/'study.json').read_text())
     if fingerprint(c) != study['config_sha256'] or json.loads((run/'complete.json').read_text())['status'] != 'complete':
         raise ValueError('Incomplete or modified study')
+    for name, expected in study.get('implementation_sha256', {}).items():
+        if digest(ROOT/name) != expected:
+            raise ValueError('Training implementation changed after run launch')
     output = run/'analysis'; output.mkdir(exist_ok=False)
     write_json(output/'analysis_provenance.json', {'git_commit': subprocess.check_output(['git','rev-parse','HEAD'], cwd=ROOT, text=True).strip(),
                'analysis_source_sha256': digest(Path(__file__)), 'bootstrap_seed': 20260926, 'bootstrap_repeats': 500,
@@ -120,6 +123,14 @@ def analyze(run):
                 aligned_values(held_ids, z['held_ids'].tolist(), z['held'])
                 aligned_values([r['sample_id'] for r in fit_refs], z['fit_ids'].tolist(), z['fit'])
                 embeddings[recipe] = (z['fit'], z['held'])
+            exported = load_checkpoint(folder/f'{recipe}-risk.pt', recipe, c, scaler, 'risk')
+            pretrained = load_checkpoint(folder/f'{recipe}-ssl.pt', recipe, c, scaler, 'ssl')
+            if any(not torch.equal(v, exported.encoder.state_dict()[k]) for k,v in pretrained.encoder.state_dict().items()):
+                raise ValueError('Frozen encoder differs from selected SSL checkpoint')
+            with torch.no_grad():
+                reproduced = exported.head(torch.tensor(embeddings[recipe][1])).squeeze(-1).sigmoid().numpy()
+            if not np.array_equal(reproduced, predictions[recipe].astype(np.float32)):
+                raise ValueError('Exported head does not reproduce recorded scores')
             write_json(output/f'fold-{fold}-{recipe}-representation.json', {'fit': representation(embeddings[recipe][0]), 'held': representation(embeddings[recipe][1])})
         # Cheap frozen-head controls; no encoder training, new search or label population.
         base = load_checkpoint(folder/'R0-random-ssl.pt', 'R0', c, scaler, 'ssl')
