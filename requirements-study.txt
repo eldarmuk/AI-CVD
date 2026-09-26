@@ -1,0 +1,8 @@
+# Tested R0/R1 foundation environment: Python 3.11.14.
+# Existing GPU environment used torch 2.5.1+cu121; the CPU build also works.
+# Provision the matching DuckDB sqlite extension separately for source-parity tests.
+torch==2.5.1
+numpy==2.4.6
+pandas==2.3.3
+duckdb==1.5.5
+tzdata>=2024.1

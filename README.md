@@ -36,10 +36,18 @@ Before implementing a model, read the [architecture-selection memo](docs/archite
 It recommends a small observation-aware masked temporal encoder and a bounded
 training/validation comparison; this is a literature-based proposal, not a trained winner.
 
+The [R0/R1 implementation foundation](docs/r0_r1_implementation.md) now provides
+masked self-supervised encoders, frozen logistic heads, patient-grouped training-only
+folds and verified indexed loading. Its synthetic tests and resource measurements
+are complete; the private architecture comparison has **not** started. Use
+`requirements-study.txt` for the model-study tests and follow the documented bounded
+command only when starting that experiment.
+
 ## Quick synthetic verification
 
 Python 3.11+ is required. The scalar reference uses the standard library; compact builds/tests require NumPy and pandas. Use `requirements-data.txt`
-for data work. The broader historical requirements are not a reproducible training
+for data work; the complete test suite also needs PyTorch from `requirements-study.txt`.
+The broader historical requirements are not a reproducible training
 environment.
 
 ```powershell
