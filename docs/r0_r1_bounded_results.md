@@ -45,4 +45,17 @@ Canonical validation/test outcomes remain untouched. No automatic superiority
 claim or progression follows a numerically higher point estimate; fold consistency,
 uncertainty, calibration and controls determine the conservative recommendation.
 
-Results pending execution. All patient-level artifacts remain Git-ignored.
+## Current execution state: paused after Fold 0 / R0
+
+Fold 0 / R0 completed its 2,000 SSL draws, frozen-head fitting and exports. The
+pause watcher stopped the original process after the final risk checkpoint was
+saved and checksum-verified. A subsequent small artifact audit verified checkpoint
+identities, frozen encoder equality, prediction/sample alignment, reproduced scores,
+sampling-plan hashes and the complete draw history, then created
+`fold-0/R0-complete.json` (`status: complete_verified`). No R1 artifacts exist.
+
+The canonical metadata/export fingerprints and saved/current study configs match.
+The original `study.json`, checkpoints, predictions and plans were preserved.
+Only one model/fold is complete; root `complete.json` is absent. No architecture
+comparison or conclusion is available yet. All patient-level artifacts remain
+Git-ignored. See [manual continuation](r0_r1_manual_resume.md).

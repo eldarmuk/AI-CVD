@@ -233,9 +233,18 @@ From the repository root, the following **proposed future command was not execut
 
 Use `--device cuda` with a different new output directory for the GPU alternative;
 do not run both merely to select a more favorable result. Existing output directories
-are rejected. Failed runs remain incomplete for audit; this version does not resume
-partial fits. The command trains only the six inner-training fits and produces
+are rejected. Add `--resume` to reuse an existing study: verified completed fits are
+skipped, and saved folds, scalers and sampling plans are preserved. Partial fits
+are refused rather than silently restarted; optimizer-step resumption is not supported.
+The command trains only the six inner-training fits and produces
 development estimates. It does not evaluate the canonical validation/test stream.
+
+Each completed fit has `fold-N/R0-complete.json` or `fold-N/R1-complete.json`, with
+`status: complete_verified` and artifact hashes. Whole-study completion requires
+all six verified model markers and root `complete.json` with `status: complete`.
+Resume adds a timestamped provenance receipt without rewriting the original study
+metadata. A historical pause receipt may remain after completion; it is an audit
+record, not the completion indicator.
 
 Reproduce the complete suite in the current machine's environment:
 
