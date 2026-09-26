@@ -1,0 +1,51 @@
+study_id = "r0_r1_foundation"
+version = "1.0.0"
+task_config = "configs/tasks/level3_4h.toml"
+task_identifier = "level3_4h@2.1.1:4d8e27385d1187d649ee19ee63ec199dc40ee4fa6e05a5991ccbbb9bd73b6f13"
+canonical_run = "runs/level3-4h-attested-20260924T095744Z"
+projection = "primitive6_process25_v1"
+pretraining_population = "train_stream"
+recipes = ["R0", "R1"]
+seed = 1729
+folds = 3
+fold_policy = "training_patients_stratified_hash_round_robin"
+normalization = "label_blind_unique_sampled_training_fold_buckets"
+
+[model]
+value_width = 32
+process_width = 16
+decoder_width = 32
+pooling = "evidence_masked_attention"
+
+[masking]
+policy = "observed_cells_only"
+fraction = 0.20
+minimum_visible = 1
+minimum_targets = 1
+
+[sampling]
+policy = "patient_first_utc_blocks_without_replacement_per_cycle"
+block_minutes = 480
+patients_per_batch = 4
+max_windows_per_patient = 256
+cache_patients = 4
+cache_megabytes = 256
+short_pool_policy = "use_all_without_duplication"
+
+[resources]
+batch_size = 64
+ssl_updates = 2000
+scaler_windows = 4096
+checkpoint_every = 200
+checkpoint_batches = 4
+head_positive_per_episode_group = 4
+head_negative_per_patient = 1
+head_max_samples = 20000
+head_iterations = 50
+cpu_threads = 4
+
+[optimization]
+ssl_lr = 0.001
+head_l2 = 0.000001
+huber_delta = 1.0
+gradient_clip = 1.0
