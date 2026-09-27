@@ -11,6 +11,28 @@ from src.architecture_study.saved_analysis import evidence_from_r0
 
 
 class AnalysisTests(unittest.TestCase):
+    def test_rare_outcome_head_numerical_convergence(self):
+        from src.architecture_study.head_convergence import solve
+        # Tiny fictional counterexample at a rare-event loss scale.
+        x = np.array([[-1.],[0.],[1.],[.5]])
+        y = [0,0,0,1]; w = [10000,10000,10000,1]
+        fitted = solve(x,y,w,1e-6)
+        self.assertLess(fitted['final_objective'], fitted['initial_objective'])
+        self.assertTrue(fitted['stationarity_pass'])
+        self.assertGreater(abs(fitted['weight'][0][0]), 0)
+
+    def test_control_alignment_rejects_patient_weight_label_and_id_changes(self):
+        from src.architecture_study.verify_controls import check_prediction
+        refs = [{'sample_id': 'a', 'patient': 'p'}, {'sample_id': 'b', 'patient': 'q'}]
+        d = dict(sample_ids=['a','b'], patients=['p','q'], labels=[1,0], weights=[2,3],
+                 vital_evidence=[True,False], primitive_evidence=[True,True], scores=[.1,.2])
+        check_prediction(d, refs, [1,0], [2,3], [True,False], [True,True])
+        for key, bad in [('sample_ids',['b','a']), ('patients',['q','p']), ('labels',[0,1]),
+                         ('weights',[3,2]), ('scores',[float('nan'),.2])]:
+            changed = copy.deepcopy(d); changed[key] = bad
+            with self.assertRaises(ValueError):
+                check_prediction(changed, refs, [1,0], [2,3], [True,False], [True,True])
+
     def test_saved_r0_evidence_separates_steps_only_from_vitals(self):
         z = np.zeros((3,59), dtype=np.float32)
         z[0,57] = 1

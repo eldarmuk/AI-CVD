@@ -24,7 +24,7 @@ def evidence_from_r0(z):
     return (masks[:,:5] > 0).any(1), any_primitive
 
 
-def analyze_saved(run):
+def analyze_saved(run, write_output=True):
     begun = time.perf_counter()
     c, task = load_config(run/'config.toml')
     current, _ = load_config()
@@ -106,8 +106,9 @@ def analyze_saved(run):
         'bootstrap':paired_bootstrap(pooled_y,pooled_scores['R0'],pooled_scores['R1'],pooled_w,pooled_patients),
         'analysis_seconds':time.perf_counter()-begun, 'config_sha256':fingerprint(c), 'task_identifier':task.identifier,
         'run_metadata_sha256':store.run_hash, 'source_sha256':digest(Path(__file__))}
-    write_json(run/'saved_artifact_analysis.json', result)
-    print('All six fits verified; saved-only paired analysis written. No fitting or patient-shard access.')
+    if write_output:
+        write_json(run/'saved_artifact_analysis.json', result)
+    return result
 
 
 if __name__ == '__main__':
@@ -115,3 +116,4 @@ if __name__ == '__main__':
     parser.add_argument('--run', required=True)
     args = parser.parse_args()
     analyze_saved(Path(args.run))
+    print('All six fits verified; saved-only paired analysis written. No fitting or patient-shard access.')
