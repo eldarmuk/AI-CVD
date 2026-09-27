@@ -1,10 +1,156 @@
 # Problem 8 decision after the predefined controls
 
-Reviewed 2026-09-27. **R0 remains the preferred provisional reference, but Problem 8
-is not closed.** A numerical stopping defect affects the fold-2 value-access
-control. The single next action is a separate saved-embedding head-convergence
-sensitivity check, not a new architecture or more encoder training. Original
-results and the frozen configuration remain unchanged.
+Final review 2026-09-27: **Outcome A — close Problem 8 with R0 as the canonical
+reference architecture.** The completed head-convergence diagnostic passed
+independent verification. Correcting the value-access control changes its
+scientific interpretation, but does not justify more architectural complexity
+or another endpoint-adaptation experiment before freezing the reference.
+No encoder was retrained and the frozen study remains unchanged.
+
+The final decision and corrected tables below supersede the historical pending
+decision later in this document. Retain the earlier results as the original
+bounded study, and report the numerical sensitivity analysis separately.
+
+## Final verification of the completed numerical diagnostic
+
+`head-convergence-v1/complete.json` reports completion and all stationarity gates
+passing. All **14 diagnostic artifact hashes** match; all **117 original study
+and control-analysis hashes** also still match. The original R0/R1 SSL and risk
+checkpoints, sampling/masking plans, source/config fingerprints, six completion
+markers and original results remain unchanged.
+
+An independent, read-only audit (`verify_head_convergence.py`) verifies all 12
+diagnostic heads. Fit and assessment sample IDs match the original ordered plans
+and saved embedding IDs; fit inverse-inclusion weights match exactly. Patient
+membership and folds are rechecked through the original training-only scope
+audit. Labels are reconstructed from the same immutable episode-linked sample
+plans used by the diagnostic source; assessment labels also match the original
+saved controls. Labels are not separately duplicated in the diagnostic files.
+The hashed diagnostic source uses those plans directly, and its only optimizer
+operates on a newly created logistic layer over saved embeddings. No patient
+shards, canonical validation/test outcomes, or encoders enter this refitting.
+
+All 12 heads reproduce their saved scores exactly in float64. Weighted objectives
+and gradients were recomputed independently from the saved coefficients in the
+standardized training coordinates, including the unchanged L2 term. Maximum
+absolute gradients range from **8.27e-11 to 4.76e-10**, below the predeclared 1e-8
+stationarity gate. Fits took 39–105 iterations, within the diagnostic 500 cap;
+all objectives decreased. The recorded fitting/report interval was **10.30 seconds**,
+excluding the initial original-artifact audit. Results are saved privately in
+`head_convergence_verification.json`.
+
+No private optimization was run during this review. Eight focused tests pass,
+including independent objective/gradient reproduction and detection of a changed
+bias, plus the existing synthetic control-analysis and alignment tests.
+
+## Corrected development results
+
+Each cell is **AUROC / AP x 100,000**. Values are inverse-inclusion-weighted
+training-fold assessment estimates; the weighted prevalence remains 3.1022 per
+100,000. They are not canonical test-set or full-stream clinical utility results.
+Use every converged head consistently, not the better of original and corrected.
+
+| Representation/head | Fold 0 | Fold 1 | Fold 2 | Pooled |
+|---|---:|---:|---:|---:|
+| SSL R0 joint, converged | .6160 / 5.5061 | .6227 / 4.1814 | .6632 / 5.4871 | .6310 / 4.6792 |
+| SSL R1 joint, converged | .6014 / 4.4838 | .5916 / 3.8228 | .6628 / 5.9199 | .6147 / 4.4850 |
+| Process-only, converged | .5903 / 4.1590 | .5910 / 4.1532 | .6538 / 5.8072 | .6058 / 4.3075 |
+| SSL R0 value-access, converged | .6108 / 5.9786 | .6124 / 3.8511 | .6747 / 5.2942 | .6251 / 4.4280 |
+| Frozen-random R0, original head | .6158 / 4.4563 | .6109 / 4.2547 | .6551 / 5.6821 | .6238 / 4.6001 |
+
+The random control was not refitted: its embeddings were not saved. Its hash,
+patient/sample alignment and recorded metrics remain verified, but independent
+score replay and strict-gradient convergence are unverified. Therefore the
+corrected-SSL versus original-random comparison is a qualified sensitivity
+comparison, not an exactly solver-matched refit. The original matched-budget
+comparison also showed no established SSL benefit.
+
+| Pooled result | Original AUROC | Converged AUROC | Original AP x 100,000 | Converged AP x 100,000 |
+|---|---:|---:|---:|---:|
+| SSL R0 joint | .63068 | .63099 | 4.67502 | 4.67923 |
+| SSL R1 joint | .61487 | .61475 | 4.49135 | 4.48497 |
+| Process-only | .60560 | .60577 | 4.30352 | 4.30748 |
+| Value-access | .58723 | .62507 | 3.92725 | 4.42803 |
+
+The optimizer defect **materially affected value-access**: pooled AUROC increases
+by .03784 and AP by .50078 per 100,000. Fold 2 changes from .5000 / 3.1139 to
+.6747 / 5.2942. The other pooled results barely change. This overturns an
+interpretation that process-only generally outperforms value-access, and removes
+the earlier apparent clear pooled joint advantage over value-access.
+
+## Strength of the corrected evidence
+
+**Consistent directional evidence:** value-access AUROC exceeds process-only by
+.02051, .02142 and .02096 across the three folds. Joint R0 also exceeds process-only
+AUROC in all folds (+.02572, +.03180, +.00945). Thus access to the value-containing
+temporal representation appears to contribute useful incremental ranking signal
+over fixed process summaries in this development study. It is no longer defensible
+to dismiss the value representation based on the failed fold-2 fit.
+
+**Weak or mixed evidence:** value-access AP exceeds process-only only in fold 0;
+joint R0 AP exceeds process-only in folds 0 and 1, but is lower in fold 2. Joint
+R0 versus value-access is also mixed: AUROC favors joint in two folds and
+value-access in fold 2; AP favors joint in folds 1 and 2 and value-access in fold 0.
+The small pooled joint advantage does not establish that concatenating process
+summaries consistently improves over value-access for every ranking metric.
+
+**Unresolved interpretation:** value-access is not purely physiological: its
+encoder necessarily contains masks, recency and temporal observation structure.
+It also includes Steps and evidence flags. These controls distinguish learned
+value-access representations from fixed process summaries, not a causal effect
+of physiological magnitudes alone. Process-only remains a credible predictor
+and wins AP in two folds against value-access. Retain observation-process
+dependence as a central limitation and process-only/missingness-stratified
+evaluation as planned ablations. Clinical usefulness, transportability to another
+monitoring workflow and gains specifically attributable to physiology remain
+unresolved.
+
+For context, descriptive 500-repetition paired patient-cluster 95% intervals
+(same seed 20260926) are below. They condition on fixed fits/sampled windows,
+do not account for retraining uncertainty, and are not multiplicity-adjusted.
+Statistical significance is not a gate for this architecture decision.
+
+| Corrected contrast | Pooled AUROC difference (95% interval) | AP difference x 100,000 (95% interval) |
+|---|---:|---:|
+| Joint R0 minus process-only | +.02522 (-.00667, +.05211) | +.37175 (-.33481, +1.61298) |
+| Value-access minus process-only | +.01930 (-.02097, +.06042) | +.12055 (-.77775, +1.50776) |
+| Joint R0 minus value-access | +.00592 (-.01912, +.02684) | +.25120 (-.37456, +.79283) |
+| Joint R0 minus original random | +.00716 (-.01733, +.02794) | +.07914 (-.51417, +.88908) |
+| R1 minus R0 | -.01624 (-.04060, +.00678) | -.19426 (-1.09359, +.28465) |
+
+**SSL conclusion:** pretraining learns reconstruction, but meaningful downstream
+benefit over frozen-random features is still not demonstrated. Corrected SSL R0
+has slightly higher AUROC in all folds; AP improves only in fold 0. The numerical
+repair does not change that conclusion. This is not evidence that SSL is useless,
+and the random-head limitation prevents a definitive equivalence claim.
+
+## Final Problem 8 decision: A
+
+**Close Problem 8 with R0 as the canonical reference architecture.** Preserve the
+approved primitive projection, missingness-aware single encoder, deterministic
+empty-window handling, fixed process summaries and frozen logistic-head design.
+Treat reliable head convergence as an implementation requirement in future
+protocols; do not retroactively change the frozen original study or its checkpoints.
+
+R1 has no consistent benefit, and improved reconstruction still does not predict
+better endpoint ranking. The corrected controls show useful value-access ranking
+signal rather than a concrete failure requiring representation-to-endpoint
+adaptation. With only 124 training episodes, final-block adaptation would introduce
+additional fitting flexibility without evidence that it is needed to settle this
+bounded architecture choice. Do not add that experiment merely because the
+pooled AUROC is modest or intervals include zero. No R2 cross-attention or R3 VAE.
+
+There is **no remaining architecture-selection experiment**, so no training
+command, runtime, resume mode or completion marker is applicable. Do not rerun
+`head_convergence` against its completed directory. Problem 9 has not begun.
+Closing this development choice is not a claim of clinical validation, SSL
+superiority, or a predominantly physiological predictor.
+
+## Historical review before the convergence diagnostic
+
+The following records the prior pending decision and original results. Its
+requests to run the numerical diagnostic and keep Problem 8 open are superseded
+by the verified final decision above.
 
 ## Artifact verification
 

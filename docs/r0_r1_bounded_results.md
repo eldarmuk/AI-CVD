@@ -239,9 +239,9 @@ four threads, batch cap 64. No GPU study fitting was performed.
 
 ## Remaining controls and decision
 
-**Update 2026-09-27:** the controls below subsequently completed. See
-[the Problem 8 decision](problem8_decision.md) for verified fold/pooled comparisons,
-the discovered numerical stopping defect, and the single required next check.
+**Final update 2026-09-27:** the controls and numerical convergence diagnostic
+subsequently completed. See [the Problem 8 decision](problem8_decision.md) for
+verified corrected comparisons and closure with R0 as the canonical reference.
 The remainder of this section records the earlier status and original manual
 command; do not rerun it against the completed analysis directory.
 

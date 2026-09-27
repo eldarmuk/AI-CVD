@@ -13,6 +13,7 @@ from src.architecture_study.saved_analysis import evidence_from_r0
 class AnalysisTests(unittest.TestCase):
     def test_rare_outcome_head_numerical_convergence(self):
         from src.architecture_study.head_convergence import solve
+        from src.architecture_study.verify_head_convergence import objective_gradient
         # Tiny fictional counterexample at a rare-event loss scale.
         x = np.array([[-1.],[0.],[1.],[.5]])
         y = [0,0,0,1]; w = [10000,10000,10000,1]
@@ -20,6 +21,12 @@ class AnalysisTests(unittest.TestCase):
         self.assertLess(fitted['final_objective'], fitted['initial_objective'])
         self.assertTrue(fitted['stationarity_pass'])
         self.assertGreater(abs(fitted['weight'][0][0]), 0)
+        objective, gradient = objective_gradient(x,y,w,fitted,1e-6)
+        self.assertAlmostEqual(objective, fitted['final_objective'], places=12)
+        self.assertAlmostEqual(gradient, fitted['final_gradient_max'], places=12)
+        changed = copy.deepcopy(fitted); changed['bias'][0] += 1
+        _, bad_gradient = objective_gradient(x,y,w,changed,1e-6)
+        self.assertGreater(bad_gradient, 1e-8)
 
     def test_control_alignment_rejects_patient_weight_label_and_id_changes(self):
         from src.architecture_study.verify_controls import check_prediction
