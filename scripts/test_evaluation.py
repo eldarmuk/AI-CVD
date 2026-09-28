@@ -1,4 +1,4 @@
-"""Problem 10: fixed, evaluation-only manual entry point. No fitting or resume."""
+"""Problem 10: fixed evaluation only. Recovery requires the separate audited command."""
 import argparse
 import json
 import platform
@@ -29,7 +29,8 @@ OUTPUT = BASE/'r0-final-v1-test'
 SPEC_HASH = '0ad2c76b2f8ec65ead77c66067e3760d3581e6d762b47a1ed2e3cb5a6986899c'
 ENGINEERING_HASH = 'd284a32cbf27a315f72cd8a8da8dd7bd4cd622cadf3ccae19d831221e3e5be83'
 CODE = ('scripts/test_evaluation.py', 'scripts/test_uncertainty.py',
-        'scripts/validation_audit_math.py', 'scripts/accelerated_r0.py', 'scripts/validation_support.py')
+        'scripts/validation_audit_math.py', 'scripts/accelerated_r0.py', 'scripts/validation_support.py',
+        'scripts/test_recovery.py')
 
 
 def read(path):
@@ -207,26 +208,39 @@ def subgroup_result(result, times, mask, events, task):
 
 
 @torch.inference_mode()
-def execute(receipt_path):
-    if OUTPUT.exists(): raise FileExistsError('One-shot output exists: preserve partial/completed work; explicit recovery review required')
-    receipt,e,task,model,scaler,root,blind = preflight()
-    approved = read(receipt_path)
-    if approved != receipt: raise ValueError('Preflight receipt stale; no test access')
-    if subprocess.check_output(['git','status','--porcelain','--untracked-files=normal'],cwd=ROOT,text=True).strip():
-        raise ValueError('Commit reviewed code before definitive evaluation')
-    reserve(OUTPUT); begun = time.perf_counter()
-    write_json(OUTPUT/'started.json',{'status':'started','utc':datetime.now(timezone.utc).isoformat(),
-        'preflight':receipt,'python':platform.python_version(),
-        'packages':{p:version(p) for p in ('torch','numpy','pandas','scipy')},
-        'recovery':'No automatic resume/restart. Preserve all files for explicit recovery review.'})
+def execute(receipt_path, *, recovery_audit=None):
+    completed = []
+    if recovery_audit is None:
+        if OUTPUT.exists(): raise FileExistsError('One-shot output exists: preserve partial/completed work; explicit recovery review required')
+        receipt,e,task,model,scaler,root,blind = preflight()
+        approved = read(receipt_path)
+        if approved != receipt: raise ValueError('Preflight receipt stale; no test access')
+        if subprocess.check_output(['git','status','--porcelain','--untracked-files=normal'],cwd=ROOT,text=True).strip():
+            raise ValueError('Commit reviewed code before definitive evaluation')
+        reserve(OUTPUT)
+        write_json(OUTPUT/'started.json',{'status':'started','utc':datetime.now(timezone.utc).isoformat(),
+            'preflight':receipt,'python':platform.python_version(),
+            'packages':{p:version(p) for p in ('torch','numpy','pandas','scipy')},
+            'recovery':'No automatic resume/restart. Preserve all files for explicit recovery review.'})
+    else:
+        from scripts.test_recovery import prepare
+        bundle,receipt,completed = prepare(receipt_path,recovery_audit)
+        _,e,task,model,scaler,root,blind = bundle
+    begun = time.perf_counter()
     # First outcome access occurs only after every frozen gate and one-shot reservation.
     export = read(root/'exports/test-stream.json')
     check_hash(root/'exports/test-stream.json',receipt['test_export_sha256'])
-    n = receipt['windows']; arrays = {key:np.lib.format.open_memmap(OUTPUT/f'{key}.npy',mode='w+',dtype=dtype,shape=(n,))
+    n = receipt['windows']; arrays = {key:np.lib.format.open_memmap(OUTPUT/f'{key}.npy',mode='r+' if completed else 'w+',dtype=dtype,shape=(n,))
         for key,dtype in [('scores','float64'),('labels','uint8'),('vital','bool'),('primitive','bool'),('patient_index','int32')]}
     accum = {key:accumulator() for key in ('all','physiology_observed','no_physiology','no_primitive')}
     manifest = []; pos = 0
     for ordinal,s in enumerate(export['shards']):
+        if ordinal<len(completed):
+            row=completed[ordinal]; manifest.append(row); add(accum['all'],row['operational'])
+            for name,result in row['strata'].items():
+                if result['supported_cells']: add(accum[name],result)
+            pos += row['samples']
+            continue
         p = s['senior_id']; b = blind['shards'][ordinal]
         if any(s[k] != v for k,v in b.items()): raise ValueError('Blind manifest changed')
         path = root/s['file']; check_hash(path,s['sha256'])
@@ -249,9 +263,11 @@ def execute(receipt_path):
             'offset':pos,'source_shard_sha256':s['sha256'],'events':s['events'],
             'operational':result,'strata':strata,'guards':guards}
         manifest.append(row)
-        write_json(OUTPUT/f'patient-{ordinal:06d}.json',row)
         for key,value in [('scores',raw),('labels',a['target']),('vital',vital),('primitive',primitive),('patient_index',ordinal)]:
             arrays[key][pos:pos+len(times)] = value
+            arrays[key].flush()
+        # Commit the patient record only after the prediction and pooled cache are durable.
+        write_json(OUTPUT/f'patient-{ordinal:06d}.json',row)
         pos += len(times)
         print(f'Test patient {ordinal+1}/{len(export["shards"])} complete; {pos}/{n} windows',flush=True)
     if pos != n: raise ValueError('Incomplete population')
@@ -273,7 +289,8 @@ def execute(receipt_path):
     memory = psutil.Process().memory_info()
     report['resources'] = {'device':'cpu','threads':4,'batch_size':256,
         'peak_working_set_bytes':getattr(memory,'peak_wset',None),'current_rss_bytes':memory.rss,
-        'end_to_end_windows_per_second':n/report['seconds']}
+        'end_to_end_windows_per_second':(n-sum(r['samples'] for r in completed))/report['seconds'],
+        'runtime_scope':'current continuation only' if completed else 'entire uninterrupted execution'}
     write_json(OUTPUT/'patients.json',manifest); write_json(OUTPUT/'test_results.json',report)
     write_json(OUTPUT/'final_result_manifest.json',{'preflight':receipt,'evaluation_spec':e,
         'engineering_supplement':read(ENGINEERING),'source_sha256':code_hashes(),

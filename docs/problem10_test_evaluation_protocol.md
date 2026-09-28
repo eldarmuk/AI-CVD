@@ -1,5 +1,10 @@
 # Problem 10: one-shot held-out evaluation protocol
 
+Recovery note: an accidental process interruption after patient 391 is handled
+by the explicit, integrity-gated continuation amendment in
+`docs/problem10_recovery_protocol.md`. The ordinary one-shot command still
+refuses existing output. Scientific specifications remain unchanged.
+
 The evaluation runner is implemented; canonical test scoring has **not** been
 executed. Problem 9 remains closed. No model, calibration, threshold, cooldown,
 projection, task or architecture changes are permitted based on test results.

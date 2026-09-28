@@ -88,7 +88,7 @@ class OneShotTests(unittest.TestCase):
     def test_no_fitting_or_gradient_calls(self):
         forbidden = {'backward','grad','enable_grad','set_grad_enabled','fit_intercept','select_threshold',
                      'fit_scaler','fit','train','Adam','SGD','LBFGS','minimize'}
-        for name in ('scripts/test_evaluation.py','scripts/test_uncertainty.py'):
+        for name in ('scripts/test_evaluation.py','scripts/test_uncertainty.py','scripts/test_recovery.py'):
             tree = ast.parse((ev.ROOT/name).read_text())
             calls = {n.func.attr if isinstance(n.func,ast.Attribute) else n.func.id
                      for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,(ast.Name,ast.Attribute))}
