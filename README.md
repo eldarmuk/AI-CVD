@@ -1,5 +1,16 @@
 # AI-CVD
 
+I study acute health events in older adults using wearable sensor data. This repository brings together data preparation, model comparisons and work on interpretability.
+
+[AIME 2026 paper](https://doi.org/10.1007/978-3-032-30710-1_17) · [Feature dictionary](docs/FEATURE_DICTIONARY.md)
+
+Research code, with later experiments alongside the published study. Reproducing it requires the relevant data and experiment settings.
+
+<details>
+<summary>Setup and technical notes</summary>
+
+# AI-CVD
+
 Research on detecting acute health events in older adults from longitudinal wearable data. I’m interested in what makes a model useful beyond its score: the data it sees, the patterns it relies on, and the number of alarms a chosen threshold might produce.
 
 My work at Łódź University of Technology includes data preparation, physiological and circadian features, model comparisons, and interpretation, supervised by Prof. Krzysztof Grudzień.
@@ -56,3 +67,5 @@ The builder accepts `--db`, `--output`, `--elite-cohort`, `--threads` and memory
 - There is no end-to-end reproduction claim from this documentation update. Source files were syntax-checked; training and patient-data pipelines were not rerun.
 
 [About my work](https://eldarmukhtar.ovh/) · [Contact](mailto:eldar.mukhtarov.tech@gmail.com)
+
+</details>
