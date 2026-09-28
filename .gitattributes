@@ -1,0 +1,2 @@
+# Exported analysis pages should not dominate the repository language summary.
+reports/*.html linguist-generated=true
