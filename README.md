@@ -1,71 +1,62 @@
-# AI-CVD
+# AI-CVD · Wearable time-series research
 
-I study acute health events in older adults using wearable sensor data. This repository brings together data preparation, model comparisons and work on interpretability.
+Research on **older-adult telecare**: anomaly detection, continuous early warning,
+and prediction of recorded outcomes after an SOS alarm. The wearable channels include
+heart rate, systolic/diastolic blood pressure, oxygen saturation, temperature and activity
+(steps). These are retrospective research tasks, not a validated cardiovascular detector.
 
-[AIME 2026 paper](https://doi.org/10.1007/978-3-032-30710-1_17) · [Feature dictionary](docs/FEATURE_DICTIONARY.md)
+**Published:** Eldar Mukhtarov and Krzysztof Grudzień,
+*Unsupervised Anomaly Detection of Acute Health Events in Older Adults Using
+Longitudinal Wearable Sensor Data*, AIME 2026.
+[Springer / DOI](https://doi.org/10.1007/978-3-032-30710-1_17)
 
-Research code, with later experiments alongside the published study. Reproducing it requires the relevant data and experiment settings.
+| Study | Question | Status |
+| --- | --- | --- |
+| [AIME 2026](docs/studies/aime-2026.md) | Can an LSTM-VAE provide an unsupervised feasibility baseline? | Published; AUROC 0.68 |
+| [Study A](docs/studies/study-a.md) | Can preceding wearable history forecast an alarm later classified Level 3? | Repaired study; internally completed |
+| [Study B](docs/studies/study-b.md) | Given an SOS episode, can strictly earlier history help prioritize recorded outcomes? | Completed; manuscript in preparation |
 
-<details>
-<summary>Setup and technical notes</summary>
+These tasks have different populations, labels and evaluation designs. Their AUROCs
+are **not a leaderboard**. Study B's held-out AUROC is 0.67102 and AP is 0.05391;
+85.19% sensitivity requires prioritizing 56.63% of episodes, with only 27 test L3 episodes.
 
-# AI-CVD
+[Start here](docs/START_HERE.md) · [Research overview](docs/RESEARCH_OVERVIEW.md) ·
+[Reproducibility](docs/REPRODUCIBILITY.md) · [Limitations](docs/LIMITATIONS.md) ·
+[Publications](docs/PUBLICATIONS.md)
 
-Research on detecting acute health events in older adults from longitudinal wearable data. I’m interested in what makes a model useful beyond its score: the data it sees, the patterns it relies on, and the number of alarms a chosen threshold might produce.
+## Quick start
 
-My work at Łódź University of Technology includes data preparation, physiological and circadian features, model comparisons, and interpretation, supervised by Prof. Krzysztof Grudzień.
+Use **64-bit Python 3.12** on Windows or Linux (CPU).
+From this checkout, in a new virtual environment:
 
-## Start here
-
-- [AIME 2026 paper](https://doi.org/10.1007/978-3-032-30710-1_17): **Unsupervised Anomaly Detection of Acute Health Events in Older Adults Using Longitudinal Wearable Sensor Data**, Eldar Mukhtarov and Krzysztof Grudzień.
-- [Feature dictionary](docs/FEATURE_DICTIONARY.md): how the features are defined.
-- [`src/models`](src/models): sequence and circadian-model implementations.
-- [`src/pipelines`](src/pipelines): preprocessing, training, evaluation and comparisons.
-
-The conference paper concerns the earlier anomaly-detection study. The repository also contains later supervised, circadian and deep/tree fusion experiments. Their results should not be treated as results from the same experiment or as clinical validation.
-
-## Repository map
-
-| Path | Purpose |
-| --- | --- |
-| `src/components/` | Data loading, processing and shared model components |
-| `src/pipelines/00*`–`01*` | Feature preparation, cohort filtering and dataset generation |
-| `src/pipelines/02*`–`08*` | VAE training/evaluation, tabular baselines and comparison reports |
-| `src/pipelines/09*`–`14*` | Supervised sequences, interpretation, circadian models and fusion |
-| `src/archive/` | Earlier experimental scripts; not the main entry point |
-| `notebooks/` | Database exploration and preprocessing notebooks |
-| `models/`, `reports/` | Saved experimental outputs; read with the corresponding configuration |
-
-## Reproducibility and setup
-
-This is a research workspace, not a self-contained demo. A fresh clone does **not** contain everything needed to reproduce the full study: the source database, some generated arrays and checkpoints are external to the checked-in pipeline. Several scripts use fixed paths and experiment-specific settings.
-
-For source inspection, no dataset is required. To prepare a separate Python environment:
-
-```sh
+```shell
 python -m venv .venv
-# Activate .venv using the command for your shell.
-python -m pip install -r requirements.txt
+# Activate: Windows PowerShell: .\.venv\Scripts\Activate.ps1
+# Activate: Linux: source .venv/bin/activate
+python -m pip install -r requirements.lock.txt
+python -m pip install --no-build-isolation --no-deps .
+python -m ai_cvd.demo --seed 17 --output outputs/synthetic
+python -m pytest
 ```
 
-The current requirements file is unpinned and incomplete for all experiments. In particular, the source also imports NumPy, PyTorch and SHAP; install compatible versions for the experiment and hardware you intend to use. An exact, locked reproduction environment is not supplied.
+The demo creates fictional subjects, wearable arrays and SOS episodes; isolates
+subjects across splits; constructs strictly pre-alarm inputs; fits a tiny fictional
+tabular baseline; exercises untrained GRU-D and mTAN models; and saves toy scores,
+metrics and a validation-selected priority threshold. It uses no clinical database,
+private notes, fitted scientific checkpoint or private prediction file.
+**It does not reproduce clinical results.** Choose a new output directory for each run.
 
-With an authorized dataset and those dependencies, start by reviewing the arguments to the feature builder:
+## Scope and status
 
-```sh
-python src/pipelines/00_build_multimodal_features_duckdb.py --help
-```
+This curated software candidate contains source, documentation and tests.
+Generated outputs are ignored. Private-data extraction, frozen training pipelines and
+scientific provenance remain outside this distribution. [Code map](docs/architecture/code-map.md)
+and [public/private boundary](docs/PUBLIC_PRIVATE_BOUNDARY.md) explain the separation.
 
-The builder accepts `--db`, `--output`, `--elite-cohort`, `--threads` and memory/chunk limits. Dataset generation subsequently reads `data/processed/multimodal_features.parquet` and writes arrays under `data/processed/anomaly_detection/`. Inspect each script’s input paths before running it; the numeric filenames are an orientation guide, not a guarantee that every experiment runs as one uninterrupted sequence.
+Retrospective recorded telecare outcomes do not establish independently adjudicated
+clinical events, prospective effectiveness, clinical utility or deployment readiness.
+See [all limitations](docs/LIMITATIONS.md).
 
-## Interpretation and limitations
-
-- Measurements, source patients and a filtered cohort are different denominators. Report the actual cohort for each experiment.
-- Model scores depend on the target, split, normalization and threshold selection. Check these together before comparing saved metrics.
-- These are research models, not a diagnostic service or a clinically validated decision system.
-- Existing data-derived files are not a blanket grant to redistribute the underlying study data. Use only material for which you have permission.
-- There is no end-to-end reproduction claim from this documentation update. Source files were syntax-checked; training and patient-data pipelines were not rerun.
-
-[About my work](https://eldarmukhtar.ovh/) · [Contact](mailto:eldar.mukhtarov.tech@gmail.com)
-
-</details>
+Version **1.0.0rc1** is a curated release candidate. See the
+[release preparation notes](docs/releases/v1.0.0.md) for verification and release status.
+No software license is granted by this repository; a license decision remains separate.

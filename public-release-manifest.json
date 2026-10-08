@@ -1,0 +1,320 @@
+{
+  "schema_version": 1,
+  "status": "CURATED RELEASE CANDIDATE; publication clearance confirmed by repository owner",
+  "hash_encoding": "UTF-8 with LF line endings",
+  "self": "public-release-manifest.json",
+  "files": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "8471c12efbaa0d31d0a755ff0213db11fde3e040abd1edb5c9e1eb6968f7c407",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "af66f0518ad35b64d825dbe072be4bda78c86ec978b6fc370232124ec30af4c6",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "sha256": "375aed6bfc45b48856f6aa024006c8d0770b4b111ce4021ad4ee6d4ab30268a3",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "CITATION.cff",
+      "sha256": "0d2b300bbd10320a7c2afb163eb78f1fd30673ba4b6eac22f90202a5b450f7c9",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "README.md",
+      "sha256": "349f09554f5660063763c8ca30fe4615fd876af949d24f0d8080b89d1e61a09e",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "docs/LIMITATIONS.md",
+      "sha256": "571342f20a2698cdf28d72d4df43b4866e4b1be4476106f4d68f75d0fb2fc23c",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "docs/PUBLICATIONS.md",
+      "sha256": "c625fbc836eed4dd040d2edd10e96ff113f48e34dca6fc8d116cedc17411ecb5",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "docs/PUBLIC_PRIVATE_BOUNDARY.md",
+      "sha256": "4ef74202dcaf0601bbbf28503de3e036bc128dfccc4799f2d320df2fb338084b",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "docs/REPRODUCIBILITY.md",
+      "sha256": "c016ccdfa36aca46e64995e6599dc6421bfbd60cbdc752829fa1262df0b2eea2",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "docs/RESEARCH_OVERVIEW.md",
+      "sha256": "10edbfa91fc5dc619cb1ea56410bec47cf7e391634627e8973b2ce936e235c9d",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "docs/START_HERE.md",
+      "sha256": "9933f1a23b5b56121bafc925b25821ed4ee59ee9863603523ab22dd30256025d",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "docs/architecture/code-map.md",
+      "sha256": "349f4fbac7cd17f9951734bd5247a8b944e9cb9dfc64b25beea13da82e96e928",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "docs/architecture/methods.md",
+      "sha256": "2c7d6f774656f6f3125ad85d9f17ecfce536e28c6b98442a099a4259ba014e3b",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "docs/releases/v1.0.0.md",
+      "sha256": "496d4097be9be9d347ceb9899160925e73d5ae9c2776f5fae9057c1098c0f33b",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "docs/studies/aime-2026.md",
+      "sha256": "ef6db2529943ef67d410da83a27b58bdda6c9af5770be5a1a78e0bd255255dea",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "docs/studies/study-a.md",
+      "sha256": "1a6b660d71ec1339fd725474e50e9742d34a6c45a7e43a188db0b50a8d5c5157",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "docs/studies/study-b.md",
+      "sha256": "25976d920d9012ccdb3d095dd89b6651fbcf5bf50a84509a686aedcf7a33e639",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "examples/synthetic/README.md",
+      "sha256": "813e22d05854de646d07d4a5bf04519ef650a7985ac5366df7e1b4e6bd4b7aef",
+      "classification": "SYNTHETIC",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "bef2d933bab82f1a8d34c6627969e4affe8a486aa969d0e95ff388ee4f1c11ec",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "requirements.lock.txt",
+      "sha256": "d097c50ee17d6be5cc1e31033473f93a58688545aafc26d26182d4497fffb8eb",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "src/ai_cvd/__init__.py",
+      "sha256": "2f36d3fa02c8aecb2825ea7fb6cf2fef2f2c6188adf730f25929d6c000b50147",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/config.py",
+      "sha256": "6e23fe38ecade5749ac3fa0a14d37bccf35e3832e8f2ae5bd7fc2b0965d235de",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/data/__init__.py",
+      "sha256": "fd6566554700d9b52867fc4fc61afb919c0c2beae49416c839081d5dc30491e2",
+      "classification": "SYNTHETIC",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/data/episodes.py",
+      "sha256": "e8c959adcf1ab4b2085ec4d7d50fe0ea555bc626010749eed2472027c4463427",
+      "classification": "SYNTHETIC",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/data/synthetic.py",
+      "sha256": "c5eebd19e4ded7f8504a8e5981a9abf958bead48542e5f28aa32c9f842f458be",
+      "classification": "SYNTHETIC",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/demo.py",
+      "sha256": "e0b9a9a1fde35091ae2166b1c68b51288593691c80720ac85cbf75fa4c468874",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/evaluation/__init__.py",
+      "sha256": "694ffc6d8b6eeef7cd759e0962ac7f2fb85512afcf4d698704e2dfe80fc88f45",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/evaluation/metrics.py",
+      "sha256": "8958da9bc757667c538c8ba5e94cd723961863d4530e74756cdd4f134928dfe8",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/features/__init__.py",
+      "sha256": "5449cfc03e862a017244532f2a2d7323241b7e47bbf9214b3d7ba8da5c2fcc99",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/features/attention.py",
+      "sha256": "bbee7272862ba8cc400cf11d570c87d35050e60de5aaf13d66f6d2e22408ff1c",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/features/continuous.py",
+      "sha256": "69d8ce53d5df75146d08ff4d0d1d1a14c96a7bf5f5a5a2f2efe4234fc7f678f1",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/features/episode.py",
+      "sha256": "a85956d60ab56a0f85a61943facb0776947e2beeb9c92a3459a7a0e69ceae47f",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/features/temporal.py",
+      "sha256": "3081bb5a0f8b1ebce17bb84261dc4a65ef24d461ed9930a9cc2044a4236bfb13",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/models/__init__.py",
+      "sha256": "a1263e8592872de0bca240884c7e10b708ed22a6bfdc3399fdd9e7ed2abef272",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/models/continuous.py",
+      "sha256": "3306302523d967e6f00b7b173a6fe8ec1ffdd37da9d2b620d9ca299ea4ffdbbd",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/models/grud.py",
+      "sha256": "d587ded67680af8298d617687d55da61fcb202d29fa58a5ae8303ae8da623169",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/models/legacy/__init__.py",
+      "sha256": "f2a35514a66da52856926b6a9765382456b9f0e093c8586a805a6d239cbcfeee",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/models/legacy/cgta.py",
+      "sha256": "d106a085bd57d071e4d33ad0f76c4634332a964f52995ce8db35468156842f0d",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/models/legacy/hybrid_cgta.py",
+      "sha256": "13e7483a95271a0db549a2fd6ef8fd5263fd149ca16c67cb833ee23a5f905c73",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/models/legacy/supervised_sequence.py",
+      "sha256": "8419760d9aeca205ac81647cd643d8f9f05dd0d1bb9183b2c6b6eee80bbe37fc",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/models/lstm_vae.py",
+      "sha256": "b67c524231980a39c80639225a2790804ba8499c73d120f32b8551352cae8e27",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/models/mtan.py",
+      "sha256": "9451ad86a74523379d3727326d13d0baea2dbc124c239f284d02ec7ad93ec455",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/models/tabular.py",
+      "sha256": "75a0987378547033fb95e9c55758c3d4011d1a4e0cf4be914231fa1e49d8bfa9",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/synthetic.toml",
+      "sha256": "e472ef81fec1aafe13a1e50019d355cb629763335ae20c66918de213d83ad69d",
+      "classification": "SYNTHETIC",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "tests/README.md",
+      "sha256": "a348e26f30273f78b042c8112792fe3078c28e5538c889783c76db08c89a5d5d",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256": "93fb1abeee5a2de24829c980676910aebf24bc767afd14d81f423c0a83cbda22",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "tests/test_data.py",
+      "sha256": "712164897ba99c9d83059ac553822b5c30adb5dcc54b7df018e0d21b1bf7f5f1",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "tests/test_demo.py",
+      "sha256": "5dca87739e61675e993d21d08a8960a925372bf5a978464bbd9bab6986280a04",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "tests/test_evaluation.py",
+      "sha256": "726588bba124c622bbb7ef92eef0c0c8704cde95966acc5e30c64ed84aa0b52f",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "tests/test_models.py",
+      "sha256": "79f7aeddb9c4b3d28231d47029836242b684e091fc60c04039228c883241ff15",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "tests/test_release_checks.py",
+      "sha256": "8a6ba26c992616f6c4d98ff79b8deceee0ea58b0b50ba30babd17a555ed15031",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "tools/release_checks.py",
+      "sha256": "777312e74fa90c0fe899e80d21a22e707f3593654a9eb07f1ffbc18920cbb8c4",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    }
+  ]
+}
