@@ -2,6 +2,12 @@
 
 ## 1.0.0rc1 — curated candidate, 9 October 2026
 
+- Restored the complete public processing workflow and maintained canonical feature,
+  dataset, vectorization and window-index algorithms.
+- Added transactional canonical ingestion, DuckDB/Parquet outputs, integrity/resume
+  checks, raw-to-model evaluation and synthetic processing benchmarks.
+- Restored historical training/evaluation runners as explicitly labeled source archives.
+- Added pipeline architecture, stage lineage and thesis documentation.
 - Curated the public tree into an installable ai_cvd package.
 - Retained reviewed model definitions for AIME, Study A and Study B, with separately
   labeled earlier-task legacy architectures.

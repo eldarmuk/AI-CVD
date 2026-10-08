@@ -1,0 +1,40 @@
+# Public engineering example. This is not an immutable clinical experiment config.
+task_id = "public_telemetry_continuous_example"
+version = "1"
+feature_schema_version = "causal-buckets-public-v1"
+grid_minutes = 5
+sequence_steps = 96
+lookback_minutes = 480
+horizon_minutes = 240
+prediction_stride_steps = 12
+run_in_minutes = 480
+min_valid_hr_per_run_in = 10
+min_valid_bp_per_run_in = 10
+run_in_bp_definition = "valid_paired_pulse_pressure_bucket"
+hr_sd_minutes = 240
+bp_trend_minutes = 180
+steps_sum_minutes = 360
+pulse_pressure_min = 10
+steps_duplicate_conflict_policy = "exclude_timestamp"
+endpoint = "level3"
+target_severities = [3]
+secondary_endpoint = "level2_or_level3"
+secondary_severities = [2, 3]
+input_interval = "[t-lookback,t)"
+target_interval = "(t,t+horizon]"
+event_time = "first_alarm_with_retrospective_qualifying_classification"
+burst_boundary = "inclusive_chained"
+split_unit = "senior_id"
+split_seed = 17
+split_ratios = [0.7, 0.15, 0.15]
+training_policy = "event_free_windows"
+training_excluded_severities = [2, 3]
+
+# Illustrative engineering bounds; not diagnostic criteria or clinical validation.
+[validity]
+temperature = [30, 43]
+heartrate = [30, 220]
+sbp = [60, 240]
+dbp = [30, 150]
+saturation = [70, 100]
+steps = [0, 100000]

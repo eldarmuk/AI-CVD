@@ -46,3 +46,4 @@ typing_extensions==4.16.0
 tzdata==2026.5
 urllib3==2.8.0
 wheel==0.45.1
+duckdb==1.4.3

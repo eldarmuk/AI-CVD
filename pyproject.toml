@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ai-cvd-research"
 version = "1.0.0rc1"
-description = "Wearable time-series research interfaces and fictional telecare examples"
+description = "Automated telemetry processing, research datasets and fictional telecare examples"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 authors = [{name = "Eldar Mukhtarov"}, {name = "Krzysztof Grudzień"}]
 dependencies = [
   "numpy==2.2.6", "pandas==2.2.3", "scipy==1.15.3",
-  "scikit-learn==1.6.1", "torch==2.5.1"
+  "scikit-learn==1.6.1", "torch==2.5.1", "duckdb==1.4.3"
 ]
 
 [project.optional-dependencies]
@@ -19,12 +19,14 @@ dev = ["pytest==8.3.5", "ruff==0.11.13", "build==1.2.2.post1", "cffconvert==2.0.
 
 [project.scripts]
 ai-cvd-demo = "ai_cvd.demo:main"
+ai-cvd-pipeline = "ai_cvd.pipeline.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
 ai_cvd = ["synthetic.toml"]
+"ai_cvd.pipeline" = ["example.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,5 +1,12 @@
 # Limitations
 
+The public processing interface consumes local canonical batch exports. It is not a
+live wearable gateway. Processing uses a single DuckDB writer and materializes each
+subject's history; large-subject memory and real-source scaling need workload-specific
+measurement. Its vector path supports immediate availability only. Historical source
+runners are retained for research traceability but are not fresh-checkout interfaces.
+See [pipeline limitations](PIPELINE.md#reliability-and-performance).
+
 - Retrospective recorded telecare outcomes are not automatically independently
   adjudicated clinical events. Alarm initiation, outcome recording and clinical
   deterioration are different times and concepts.

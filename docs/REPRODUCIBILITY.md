@@ -28,7 +28,21 @@ The installed command also works from a directory outside the checkout:
 ai-cvd-demo --seed 17 --output outputs/another-fictional-run
 ```
 
-## What the demo does
+## Full telemetry processing workflow
+
+For raw CSV ingestion, filtering, DuckDB/Parquet storage, dataset construction and
+model evaluation, follow [the complete pipeline](PIPELINE.md):
+
+```shell
+python -m ai_cvd.pipeline demo --subjects 12 --seed 17 --output outputs/pipeline
+python -m ai_cvd.pipeline verify outputs/pipeline/processed
+```
+
+The original `ai_cvd.demo` command remains a faster model-interface fixture.
+The full pipeline uses its model evaluation code with inputs produced from the
+processed raw data; it does not substitute the original array fixture.
+
+## What the model-interface demo does
 
 1. Generates 12 unmistakably fictional subjects, 48 SOS alerts and seeded wearable
    arrays in the year 2099. No source records, notes or fitted artifacts are inputs.

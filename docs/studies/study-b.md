@@ -26,7 +26,12 @@ recomputed by the synthetic demo. No confidence interval is invented here.
 implementations. The mTAN model is a study-specific adaptation of an established
 method, not a novel attention mechanism or a benchmark reimplementation.
 
-The [demo](../../examples/synthetic/README.md) uses explicit fictional outcome codes,
+The [complete processing pipeline](../PIPELINE.md) now builds these inputs from raw
+fictional telemetry through DuckDB and Parquet. The [stage map](../architecture/pipeline-history.md)
+connects processing, model selection, calibration and evaluation to the preserved
+internal research workflow.
+
+The [model demo](../../examples/synthetic/README.md) uses explicit fictional outcome codes,
 not private note text or institution-specific labeling rules. Its logistic baseline
 is fitted only on fictional training subjects; neural networks remain untrained.
 Thresholds are chosen on fictional validation subjects and applied to separate

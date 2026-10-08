@@ -6,19 +6,19 @@
   "files": [
     {
       "path": ".github/workflows/ci.yml",
-      "sha256": "8471c12efbaa0d31d0a755ff0213db11fde3e040abd1edb5c9e1eb6968f7c407",
+      "sha256": "aed5318dfa6c4c4ceb94f024171188a148297631b20fe3cf75479d12a861dade",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
     {
       "path": ".gitignore",
-      "sha256": "af66f0518ad35b64d825dbe072be4bda78c86ec978b6fc370232124ec30af4c6",
+      "sha256": "987fefc48c3320243c7f06d728dc61773464fa321b11e8d0247eb3fd7b082c73",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "375aed6bfc45b48856f6aa024006c8d0770b4b111ce4021ad4ee6d4ab30268a3",
+      "sha256": "80bf482c8db5470d1b8343bae59858f96111c4a5a88169f77f403dd2d8af549d",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
@@ -30,13 +30,19 @@
     },
     {
       "path": "README.md",
-      "sha256": "349f09554f5660063763c8ca30fe4615fd876af949d24f0d8080b89d1e61a09e",
+      "sha256": "ca20a960c8a0ae84b31012f545e1fb45cc48ce550168e5766ba73cf230176162",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
     {
       "path": "docs/LIMITATIONS.md",
-      "sha256": "571342f20a2698cdf28d72d4df43b4866e4b1be4476106f4d68f75d0fb2fc23c",
+      "sha256": "6d2d1d4f1bdfb54cc4df3a1087615f0c0380739e5ec37004a541a61569ab9f8b",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "docs/PIPELINE.md",
+      "sha256": "55d78980f0dd50c6521beabf0f4e4e682a9977596604cf9879f32d4362c532ec",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
@@ -48,31 +54,37 @@
     },
     {
       "path": "docs/PUBLIC_PRIVATE_BOUNDARY.md",
-      "sha256": "4ef74202dcaf0601bbbf28503de3e036bc128dfccc4799f2d320df2fb338084b",
+      "sha256": "4afac9d12733401b7adf18906580f30f8cde65308e277886327ebadc7526a75e",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
     {
       "path": "docs/REPRODUCIBILITY.md",
-      "sha256": "c016ccdfa36aca46e64995e6599dc6421bfbd60cbdc752829fa1262df0b2eea2",
+      "sha256": "cf8c8d55fb2d643b5dad9c7e5fe6b02cd226a27dd9d7920a9288756b188a5c60",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
     {
       "path": "docs/RESEARCH_OVERVIEW.md",
-      "sha256": "10edbfa91fc5dc619cb1ea56410bec47cf7e391634627e8973b2ce936e235c9d",
+      "sha256": "a35bd753da7a329727b4c948ad2452328ed5eb699e854adc345eeda99049c24b",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
     {
       "path": "docs/START_HERE.md",
-      "sha256": "9933f1a23b5b56121bafc925b25821ed4ee59ee9863603523ab22dd30256025d",
+      "sha256": "e492d134c7814318922a361afe38fdb6a47ad76085dae534afb0d4dc4a85dfdd",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "docs/THESIS.md",
+      "sha256": "c50779a85ae2448e8c3b303e9df4633dc1d17fa073dd998a6bb74b7183f1a80e",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
     {
       "path": "docs/architecture/code-map.md",
-      "sha256": "349f4fbac7cd17f9951734bd5247a8b944e9cb9dfc64b25beea13da82e96e928",
+      "sha256": "85118a321cfd9cae62551c68ae7290e733562115b3a5cfde06b96f7ee58cd58f",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
@@ -83,8 +95,20 @@
       "content_role": "documentation-or-configuration"
     },
     {
+      "path": "docs/architecture/pipeline-history.md",
+      "sha256": "08bbc31b19bab4386c8787458d691c641146165b9dc524b2e89d6f02fe262374",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "docs/architecture/source-contract.md",
+      "sha256": "b8c4156fa6b925bf66be1fbc896c52cd51fad715311b8850c3814246e63445f6",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration"
+    },
+    {
       "path": "docs/releases/v1.0.0.md",
-      "sha256": "496d4097be9be9d347ceb9899160925e73d5ae9c2776f5fae9057c1098c0f33b",
+      "sha256": "6c171c2067dc0dca402b96f155ab568fb927ab1b147ff59c114083d6fe58dcd1",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
@@ -96,13 +120,13 @@
     },
     {
       "path": "docs/studies/study-a.md",
-      "sha256": "1a6b660d71ec1339fd725474e50e9742d34a6c45a7e43a188db0b50a8d5c5157",
+      "sha256": "244e61cba2e7ba5bcd8137f75ef559a46e7d075107116db5a3e317f471722d45",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
     {
       "path": "docs/studies/study-b.md",
-      "sha256": "25976d920d9012ccdb3d095dd89b6651fbcf5bf50a84509a686aedcf7a33e639",
+      "sha256": "89b2c87e2777756fb3d87ffc1c4843902095d104e1cb5716b0d43ddbe62fad5d",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
@@ -113,14 +137,110 @@
       "content_role": "documentation-or-configuration"
     },
     {
+      "path": "legacy/pipelines/02_train_vae.py",
+      "sha256": "c0fc18c6a10a6649068679186d26513a43bfdcce1e64da9a3c1634239629bbc5",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
+      "path": "legacy/pipelines/03_evaluate.py",
+      "sha256": "90be901184a75aa0180b39b2579f4d5b2b1ad73f80ac7f40ff4739a607b37f43",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
+      "path": "legacy/pipelines/03b_evaluate_auprc.py",
+      "sha256": "1a16a9390583427980a3ec3dece3e423b1b4acbd8956da45ba6ea5f5bc8b1792",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
+      "path": "legacy/pipelines/04_analyze_results.py",
+      "sha256": "00f77260ed29923447bc53d9ac631d405364968b2149a34f0a380bcaef1464f9",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
+      "path": "legacy/pipelines/05_train_grid_search.py",
+      "sha256": "5ab84973aff5ce4f540a78fbfd0445e9fe6834e4e8d8fc273eefe517f9f9034b",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
+      "path": "legacy/pipelines/06_flatten_tabular_features.py",
+      "sha256": "e62d9631cbad8d7a66f0c8236513bbbc00e9923464aa77203f62216975f8cbd9",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
+      "path": "legacy/pipelines/07_run_classical_baselines.py",
+      "sha256": "6444a1b6bf77c5861806d7211f44b449368d6c83006332190ec7855f09cdcb02",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
+      "path": "legacy/pipelines/08_benchmark_report.py",
+      "sha256": "8492f5fb66cd6429bd02f0ff22af9ae50de67bb5b6b88ad2e4229b829846aa97",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
+      "path": "legacy/pipelines/09_train_supervised_sequence.py",
+      "sha256": "56c8d11fd95fcb397eb8a0bb098d0d70b471c1882840009caad70876de2164de",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
+      "path": "legacy/pipelines/10_analyze_shap_rf.py",
+      "sha256": "b9538c4a6c536e802248d31020d0716c10d88ae9dd09f0851a281d0bec9b13cf",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
+      "path": "legacy/pipelines/11_train_cgta_net.py",
+      "sha256": "e8c016e917394b35175bd9dc625c9d7efb92f40a5981c65895d281601b279711",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
+      "path": "legacy/pipelines/12_train_hybrid_cgta.py",
+      "sha256": "b2ac7fc459ef5b295ff459997a20c904dd0f601517d9a1b94e22170c41da9d47",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
+      "path": "legacy/pipelines/13_extract_cgta_embeddings.py",
+      "sha256": "10c66ab5d3df0c22ba5cb5b16180c6f7f37831fa6e15234069f03eec20407d5a",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
+      "path": "legacy/pipelines/14_train_deep_tree_fusion.py",
+      "sha256": "a144feb47c196875a817ff878ad716b94b879a695204e61cc455093526fe82a4",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
+      "path": "legacy/pipelines/README.md",
+      "sha256": "8778ad791a9d1e3ecb6703e7fb2dadb1fa7d936ab2a65b509883d5293ef8b9c0",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
+      "path": "legacy/pipelines/run_comparisons.py",
+      "sha256": "d422d78ff915c5a19b8ee05995dea3d7ce316397218d523f8295ac34651284bd",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "archival-source"
+    },
+    {
       "path": "pyproject.toml",
-      "sha256": "bef2d933bab82f1a8d34c6627969e4affe8a486aa969d0e95ff388ee4f1c11ec",
+      "sha256": "1f28cdfc276d11db1a117b60d48fbdc91683bf08c4033270d226538dda28d316",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
     {
       "path": "requirements.lock.txt",
-      "sha256": "d097c50ee17d6be5cc1e31033473f93a58688545aafc26d26182d4497fffb8eb",
+      "sha256": "5a1f9a503234205c315862d699adb047d2595e2e20e701a37f24026dccfa85ab",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
@@ -156,7 +276,7 @@
     },
     {
       "path": "src/ai_cvd/demo.py",
-      "sha256": "e0b9a9a1fde35091ae2166b1c68b51288593691c80720ac85cbf75fa4c468874",
+      "sha256": "40e4441da8b51fc274a528c584bc67d967280ef7b30bb25a5eeedcbc4a5cafaa",
       "classification": "PUBLIC-APPROVED",
       "content_role": "source"
     },
@@ -263,6 +383,84 @@
       "content_role": "source"
     },
     {
+      "path": "src/ai_cvd/pipeline/__init__.py",
+      "sha256": "f78db6adec54b1f81583550347f8b4089f1f33f180fcf6a4850a2ff9f540dbac",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/pipeline/__main__.py",
+      "sha256": "301778d23e6a4d5d393840ec34c20ca6309191f49f03bbeb55bc1026ce2d1d21",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/pipeline/dataset.py",
+      "sha256": "ef369b79f5481ef2ccdd1a9e37517fb42eb55d871b46a961375614a893da39e9",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/pipeline/episodes.py",
+      "sha256": "0e2008b2f85ce668c2957c87ece0c6413f506fa68670c9f262e408d3b605fc58",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/pipeline/example.toml",
+      "sha256": "844122c0f30c24641432727b8b39f80d51049eec9c4816d3471769f5245fbaee",
+      "classification": "SYNTHETIC",
+      "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "src/ai_cvd/pipeline/features.py",
+      "sha256": "7d9e560bed6fec5f851f2e10ac69e065898fc274920db0cf628cd7ddf3d88a0a",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/pipeline/fixture.py",
+      "sha256": "1f24fa2781277b8030bad8ff707db07bfea053d0ef6578c02ff01a7145faad55",
+      "classification": "SYNTHETIC",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/pipeline/index.py",
+      "sha256": "21592b2a8544a8a1837a18aa3b12e396d05e0317bb3c77a075c558a5de5c4d04",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/pipeline/runner.py",
+      "sha256": "c9de6b832b60f0f08229e8d5b2709ea7b5ea480a181b5cfae97fb1ed850016d9",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/pipeline/storage.py",
+      "sha256": "8830628e669d97238ff174770ca9a0cd01c301dfdfda92821d1c01f31bfcc8de",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/pipeline/study_b.py",
+      "sha256": "5bb9d12b73396fa893daf9bb617330562be6b94deee61bb19007c48a1a81a7df",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/pipeline/task.py",
+      "sha256": "2fee04e18110057c1262185964d253fdb0aecf08eb1baa38bf6566d3c25e5133",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "src/ai_cvd/pipeline/vector.py",
+      "sha256": "cf8048f05f4d95800bc2f04460966e6dc4e7309bb35eecb67785d88fed98851d",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
       "path": "src/ai_cvd/synthetic.toml",
       "sha256": "e472ef81fec1aafe13a1e50019d355cb629763335ae20c66918de213d83ad69d",
       "classification": "SYNTHETIC",
@@ -301,6 +499,12 @@
     {
       "path": "tests/test_models.py",
       "sha256": "79f7aeddb9c4b3d28231d47029836242b684e091fc60c04039228c883241ff15",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "source"
+    },
+    {
+      "path": "tests/test_pipeline.py",
+      "sha256": "f883de7cd6d2407b65f2a52a0c2a460fa6ad1b8faf3e520e9e196b83d96a68f2",
       "classification": "PUBLIC-APPROVED",
       "content_role": "source"
     },

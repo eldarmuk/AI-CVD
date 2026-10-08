@@ -5,6 +5,7 @@ not src. Package resources are located through importlib.resources.
 
 | Public module | Role and internal origin |
 | --- | --- |
+| pipeline/ | Raw ingestion, restored causal features, cohort/window construction, DuckDB/Parquet storage, verification and model-input bridge; see [complete pipeline](../PIPELINE.md) |
 | data/episodes.py | Note-free fictional grouping and subject isolation; replaces demo-only grouping with UTC-normalized sorting |
 | data/synthetic.py | Seeded arithmetic fixture derived from the existing safe demo, with no clinical samples |
 | features/episode.py | Pure Study B episode statistics and PartitionPreprocessor |
@@ -37,6 +38,7 @@ without importing private runners/configurations.
 
 CGTA/fusion models explored an earlier task. They are kept to make architectural
 history understandable, not as the preferred public demo or validated improvements.
-Historical training scripts, database connectors, source note lexicons, optimizer
-state, plotting exports and mixed private/public reports are deliberately excluded.
-The exact scientific pipelines remain private rather than being silently rewritten.
+Historical training/evaluation source is retained in the [pipeline archive](../../legacy/pipelines/README.md).
+Source-specific database connectors, note lexicons, fitted artifacts, plotting exports
+and mixed private/public reports remain excluded. The [stage history](pipeline-history.md)
+maps the public implementations and exact internal execution boundaries.

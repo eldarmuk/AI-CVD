@@ -24,6 +24,8 @@ __pycache__/
 *.pem
 *.log
 *.db
+*.duckdb
+*.duckdb.wal
 *.sqlite*
 *.parquet
 *.npy

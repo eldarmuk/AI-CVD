@@ -1,6 +1,7 @@
 # Public/private content boundary
 
-This candidate contains reviewed source copies, synthetic-generator source,
+This candidate contains maintained pipeline algorithms, historical source runners,
+source-neutral storage/ingestion adapters, reviewed model copies, synthetic-generator source,
 documentation, tests, configuration, CI and dependency specifications.
 [public-release-manifest.json](../public-release-manifest.json) lists every candidate
 file and its digest (the manifest itself is self-listed without a recursive digest).

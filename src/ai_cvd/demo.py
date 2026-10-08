@@ -19,7 +19,7 @@ from ai_cvd.models.mtan import make_model as make_mtan
 from ai_cvd.models.tabular import TabularBaseline
 
 
-def run_demo(seed=17, output=None):
+def run_demo(seed=17, output=None, *, fixture=None):
     """Fit a toy tabular model; exercise untrained neural models; optionally save."""
     if not isinstance(seed, int) or seed < 0:
         raise ValueError("Nonnegative integer seed required")
@@ -27,7 +27,9 @@ def run_demo(seed=17, output=None):
     if destination is not None and destination.exists():
         raise FileExistsError("Output directory already exists; choose a new directory")
     config = public_configuration()
-    alerts, episodes, rows, records, grids = build_fixture(config, seed)
+    alerts, episodes, rows, records, grids = (
+        build_fixture(config, seed) if fixture is None else fixture
+    )
     assignment = split_patients(episodes, seed)
     partitions = {
         s: [r for r in rows if assignment[r["episode_id"]] == s]

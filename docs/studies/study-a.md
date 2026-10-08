@@ -14,8 +14,10 @@ R0/R1 observation-aware encoder definitions are retained in
 [public tensor adapter](../../src/ai_cvd/features/continuous.py) accepts normalized
 in-memory tensors; it does not reproduce the private source-schema projection.
 
-The public tests exercise model shapes, artificial masking, reconstruction loss and
-frozen-head interfaces. Private preprocessing, fitted encoders, thresholds, predictions
+The [restored processing pipeline](../PIPELINE.md) includes causal feature construction,
+subject splits, eligibility/censoring, continuous windows and lazy sequence batches.
+The public tests also exercise model shapes, artificial masking, reconstruction loss and
+frozen-head interfaces. Institution-specific extraction, fitted encoders, thresholds, predictions
 and exact run bindings are not included. This candidate does not publish additional
 Study A numerical results without a separately approved aggregate record.
 

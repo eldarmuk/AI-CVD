@@ -1,5 +1,9 @@
 # Research overview
 
+The [data pipeline](PIPELINE.md) is the shared engineering foundation: ingestion,
+measurement validity, causal features, analytical storage and task-specific datasets.
+Its architecture and evaluation are central to the [processing-pipeline thesis](THESIS.md).
+
 AI-CVD investigates longitudinal wearable measurements in older-adult telecare.
 The name is a project identifier; it does not imply cardiovascular diagnoses or a
 validated cardiovascular-event detector. Physiological channels and activity are

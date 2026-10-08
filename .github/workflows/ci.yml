@@ -27,4 +27,6 @@ jobs:
       - run: cffconvert --validate
       - run: python tools/release_checks.py
       - run: python -m ai_cvd.demo --seed 17 --output outputs/ci-synthetic
+      - run: python -m ai_cvd.pipeline demo --subjects 6 --output outputs/ci-pipeline
+      - run: python -m ai_cvd.pipeline verify outputs/ci-pipeline/processed
       - run: git diff --exit-code
