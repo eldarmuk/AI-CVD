@@ -1,34 +1,47 @@
-.vscode/
+# All generated output is private to the local run, even when fictional.
+/outputs/
+/data/
+/db/
+/models/
+/runs/
+/reports/
+/notebooks/
+/output/
+/tmp/
+/.tmp/
+/logs/
+.venv*/
 __pycache__/
-*.pyc
-
-# database files
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+/build/
+/dist/
+.env
+.env.*
+*.key
+*.pem
+*.log
 *.db
-*.sqlite3
-*.db-wal
-*.db-shm
-
-# Trash
-.trash/
-
-# Data Files
+*.duckdb
+*.duckdb.wal
+*.sqlite*
 *.parquet
 *.npy
+*.npz
 *.csv
-*.json
-*.db
-*.sqlite
-
-# Privacy-sensitive and large artifact directories
-data/raw/
-data/processed/
-db/
-models/
-
-# Logs
-logs/
-*.log
-
-# Temporary files
+*.pkl
+*.pickle
+*.joblib
+*.pt
+*.pth
+*.safetensors
+*.jsonl
 *.tmp
 *.temp
+.vscode/
+.idea/
+.DS_Store
+# JSON configuration and the reviewed public manifest are intentionally visible.
+# Ignore rules cannot remove previously tracked files or historical objects.

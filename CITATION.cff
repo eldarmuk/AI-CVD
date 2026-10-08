@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "For the published feasibility study, cite the preferred citation below. This software is a research release candidate."
+type: software
+title: "AI-CVD: Wearable time-series research"
+authors:
+  - family-names: Mukhtarov
+    given-names: Eldar
+  - family-names: Grudzień
+    given-names: Krzysztof
+version: 1.0.0-rc.1
+preferred-citation:
+  type: conference-paper
+  title: "Unsupervised Anomaly Detection of Acute Health Events in Older Adults Using Longitudinal Wearable Sensor Data"
+  authors:
+    - family-names: Mukhtarov
+      given-names: Eldar
+    - family-names: Grudzień
+      given-names: Krzysztof
+  year: 2027
+  collection-title: Artificial Intelligence in Medicine
+  collection-type: proceedings
+  volume: "16748"
+  start: 147
+  end: 152
+  publisher:
+    name: Springer
+    city: Cham
+  doi: 10.1007/978-3-032-30710-1_17

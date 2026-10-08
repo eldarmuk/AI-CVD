@@ -1,0 +1,36 @@
+# Public-safe subset of the frozen Study B declarations used by the synthetic
+# software smoke path. It contains no source paths, cohort bindings, patients,
+# predictions, fitted parameters, calibrators, or scientific thresholds.
+
+[public_synthetic]
+synthetic_only = true
+fixture_year = 2099
+not_manuscript_result_reproduction = true
+
+[history]
+primary_hours = 24
+sensitivity_hours = 8
+
+[models]
+neural_context_subset = "acquisition_activity_baseline_quality_context"
+grud_hidden = 32
+grud_head_hidden = 16
+neural_dropout = 0.1
+neural_max_parameters = 50000
+mtan_time_embedding_dim = 16
+mtan_attention_heads = 4
+mtan_query_key_dim = 16
+mtan_reference_times = 48
+
+[features]
+channel_order = ["heartrate", "sbp", "dbp", "saturation", "temperature", "pulse_pressure"]
+absolute_suffix_order = ["last_H", "median_1h", "median_6h", "median_H"]
+relative_suffix_order = ["delta_median_6h", "robust_z_6h", "delta_iqr_H", "delta_observation_rate_H"]
+observation_suffix_order = ["valid_fraction_H", "recency_H", "longest_gap_H", "baseline_usable", "baseline_valid_count", "baseline_scale_valid"]
+steps_names = ["steps__sum_H", "steps__increment_fraction_H", "steps__max_delta_interval_H", "steps__source_fraction_H"]
+clock_names = ["clock__sin", "clock__cos"]
+log1p_suffixes = ["recency_H", "longest_gap_H", "baseline_valid_count"]
+log1p_names = ["steps__sum_H", "steps__max_delta_interval_H"]
+
+[feature_subsets.acquisition_activity_baseline_quality_context]
+encoded_dimension = 56
