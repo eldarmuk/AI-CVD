@@ -11,10 +11,22 @@
       "content_role": "documentation-or-configuration"
     },
     {
+      "path": ".github/workflows/physiological-change.yml",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "da5abec2eac3f8352f4eaf4dcce849bc38529ea0ce0ec797b628f53e2c7a32e9"
+    },
+    {
       "path": ".gitignore",
       "sha256": "987fefc48c3320243c7f06d728dc61773464fa321b11e8d0247eb3fd7b082c73",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
+    },
+    {
+      "path": "AGENTS.md",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "39f191a791a9930e43f70d71704c52da9ccfb55513872d7b136aa3ca79f47d3f"
     },
     {
       "path": "CHANGELOG.md",
@@ -30,7 +42,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "ca20a960c8a0ae84b31012f545e1fb45cc48ce550168e5766ba73cf230176162",
+      "sha256": "fad2501ec6cadbb10e185b35d799046af37395a9e50c5193359cdee6dba301b0",
       "classification": "PUBLIC-APPROVED",
       "content_role": "documentation-or-configuration"
     },
@@ -467,6 +479,156 @@
       "content_role": "documentation-or-configuration"
     },
     {
+      "path": "studies/physiological_change/.gitignore",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "0ee9c46f69b6c775713d5825ed8e997d8cfe124f73b51d2d7f69d74d48d4f440"
+    },
+    {
+      "path": "studies/physiological_change/README.md",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "7f85e11176c0ceb9366fa863f9c0c92f7d563fe007d8a55221c5a861098d9bc4"
+    },
+    {
+      "path": "studies/physiological_change/RESEARCH_PLAN.md",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "7fcfea19ebf7248f9adb23171561cb322b2e6fcf1a45f45f045dcafe1ddedfc3"
+    },
+    {
+      "path": "studies/physiological_change/artifacts/README.md",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "3208d57061592234ef8be8984f5baa529fcd993fa31b47b853038368c7186cd8"
+    },
+    {
+      "path": "studies/physiological_change/configs/synthetic_demo.toml",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "dbe72d2be48cd15810edf356d2f1444d1355a55d799391b2151938a175247657"
+    },
+    {
+      "path": "studies/physiological_change/data/README.md",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "2a65c6406058eaa2e97e5d90770d823f772a39b91acfe94324d4d2b3224dd56a"
+    },
+    {
+      "path": "studies/physiological_change/docs/ARCHITECTURE.md",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "ef441fb5e75afe35a5638afe9a1260acaec4c1b278ecd906aef9ac5fa59cde6e"
+    },
+    {
+      "path": "studies/physiological_change/docs/COMPANY_EVALUATION_REQUEST.md",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "0b98a4383079e08ea28b0f1d61c0da110fb4f0228bfaffa16e425dc5d07a94bf"
+    },
+    {
+      "path": "studies/physiological_change/docs/DATA_CONTRACT.md",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "2efaa9293a02dd9317ac698d2d622146809c1231b8be8b6883c60f219aabfd85"
+    },
+    {
+      "path": "studies/physiological_change/docs/EVALUATION_PROTOCOL.md",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "af4152db306d2c3ff47359393e13b221d146df68ac5c21853185740125987c85"
+    },
+    {
+      "path": "studies/physiological_change/docs/EVIDENCE_AND_DATASETS.md",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "8cdf13f6ca5efab062900124c66ce9bda8c27fe911ab7615ad0a13e53ac5940e"
+    },
+    {
+      "path": "studies/physiological_change/docs/EXPERIMENT_LOG.md",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "5e6a6cc8c71bc232e3a39f5e5f6977c29e82281de0e225c1b794b2d28abe5867"
+    },
+    {
+      "path": "studies/physiological_change/docs/EXPLANATIONS.md",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "0b749b65b58ff50691459b668dcb5a6a78e099829db0e9a397ad69ba75c748b1"
+    },
+    {
+      "path": "studies/physiological_change/docs/REPRODUCIBILITY.md",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "documentation-or-configuration",
+      "sha256": "791cbb70859c13fefdb8f5610bd541a201d2231d7b5c2dbad6216a98274f5e2c"
+    },
+    {
+      "path": "studies/physiological_change/hr_change/__init__.py",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "synthetic-research-foundation",
+      "sha256": "7a9de1e886d32090c9907b13b20b27f12026ff372beb005e6d557617ecfcce91"
+    },
+    {
+      "path": "studies/physiological_change/hr_change/baselines.py",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "synthetic-research-foundation",
+      "sha256": "18f5658da15dbfcb3d9f7aebb59e2fae677224c2fec3c4020447fff1077ab219"
+    },
+    {
+      "path": "studies/physiological_change/hr_change/contracts.py",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "synthetic-research-foundation",
+      "sha256": "53d9ac6b6f8dc5de128da63c03e0fc2d81ff395be0ce8697d26c0bda57b41a86"
+    },
+    {
+      "path": "studies/physiological_change/hr_change/evaluation.py",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "synthetic-research-foundation",
+      "sha256": "c83a4880cbd7a2a620c890fde254ab925e11615c7ae70bf530ddf0f1ef9b77e2"
+    },
+    {
+      "path": "studies/physiological_change/hr_change/reproducibility.py",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "synthetic-research-foundation",
+      "sha256": "563c3271e571c02a4c2f19bd34f465c954c6d8ef152d49272f0c18fdbee1f248"
+    },
+    {
+      "path": "studies/physiological_change/hr_change/synthetic.py",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "synthetic-research-foundation",
+      "sha256": "9628f6d9b3781b9fa874910a98b513bf7697cf8a8d16b045f062a0458ff8329e"
+    },
+    {
+      "path": "studies/physiological_change/scripts/run_synthetic_demo.py",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "synthetic-research-foundation",
+      "sha256": "d0db74bcd93797077e474901c2ab8ffb7bffd390e8e74cfc76bad11c812f7b48"
+    },
+    {
+      "path": "studies/physiological_change/scripts/verify_run.py",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "synthetic-research-foundation",
+      "sha256": "9751dd8e55b3e02051f7d65061643c27ee19bc2327360bf6491655070555393d"
+    },
+    {
+      "path": "studies/physiological_change/tests/test_contracts.py",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "synthetic-research-foundation",
+      "sha256": "a79f20b30fe5caf17f788e8855941b10d92b7bc999e908556cad63f1bc03b99b"
+    },
+    {
+      "path": "studies/physiological_change/tests/test_evaluation.py",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "synthetic-research-foundation",
+      "sha256": "778f949a8946d7a14f6c788e53304aba85937bb3748f2d1ae27ae6a8a7396405"
+    },
+    {
+      "path": "studies/physiological_change/tests/test_reproducibility.py",
+      "classification": "PUBLIC-APPROVED",
+      "content_role": "synthetic-research-foundation",
+      "sha256": "9512610708258d91dd285d7cfd178a65da40fccaf83eb6ce3f20d8e45eef4b38"
+    },
+    {
       "path": "tests/README.md",
       "sha256": "a348e26f30273f78b042c8112792fe3078c28e5538c889783c76db08c89a5d5d",
       "classification": "PUBLIC-APPROVED",
@@ -516,9 +678,15 @@
     },
     {
       "path": "tools/release_checks.py",
-      "sha256": "777312e74fa90c0fe899e80d21a22e707f3593654a9eb07f1ffbc18920cbb8c4",
+      "sha256": "e3d7cfe0c85eb8ccf0f178b40201d77af2bfd514fbd0639d7da6842bfac0c995",
       "classification": "PUBLIC-APPROVED",
       "content_role": "source"
     }
-  ]
+  ],
+  "research_extension": {
+    "study": "physiological_change",
+    "date": "2026-11-01",
+    "status": "Synthetic foundation and study protocol; no new human-data results",
+    "public_base": "a81239ac4419f0ea0c5d36a8850e0063c6e2bc91"
+  }
 }

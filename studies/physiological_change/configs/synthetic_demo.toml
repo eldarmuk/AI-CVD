@@ -1,0 +1,6 @@
+# Arithmetic illustration only. This is not a clinical threshold or study protocol.
+schema_version = 1
+purpose = "synthetic_contract_verification"
+change_threshold_bpm = 10.0
+minimum_observations_per_window = 1
+methods = ["last_observation", "window_median"]

@@ -19,7 +19,7 @@ def path_problem(name):
         return "unsafe path"
     if path.parts[0] in FORBIDDEN_DIRS:
         return "generated/private directory"
-    if name == ".gitignore":
+    if name in {".gitignore", "studies/physiological_change/.gitignore"}:
         return None
     if path.suffix not in ALLOWED_SUFFIXES:
         return "unreviewed file type"

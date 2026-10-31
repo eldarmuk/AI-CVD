@@ -1,0 +1,27 @@
+# Patient-derived and generated files remain local even when public data are used.
+data/**
+!data/README.md
+artifacts/**
+!artifacts/README.md
+checkpoints/
+cache/
+.venv/
+*.egg-info/
+__pycache__/
+*.pyc
+*.parquet
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.edf
+*.hea
+*.dat
+*.pt
+*.pth
+*.npy
+*.npz
+*.csv
+*.json
+*.jsonl
+*.log

@@ -1,4 +1,16 @@
-# AI-CVD · Remote telemetry processing and research
+# AI-CVD · Physiological change reliability
+
+This branch develops a separate study of whether wearable-data cleaning preserves
+independently confirmed heart-rate changes. Start with the
+[research plan](studies/physiological_change/RESEARCH_PLAN.md) and the
+[public synthetic verification commands](studies/physiological_change/README.md).
+The new package is a research scaffold; no model has been trained or clinically
+validated. Future agents should read the plan and its current milestone first.
+
+The existing public pipeline and previous-study documentation are preserved below.
+Their tasks, dependencies and results are separate from the new study.
+
+## Previous research and telemetry pipeline
 
 An automated data-processing pipeline for **older-adult telecare**, from raw wearable
 exports through validation, filtering, causal time alignment, DuckDB/Parquet storage

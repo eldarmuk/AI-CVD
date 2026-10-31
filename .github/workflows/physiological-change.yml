@@ -1,0 +1,37 @@
+name: Physiological change synthetic verification
+
+on:
+  push:
+    branches: [research/hr-change-reliability]
+    paths:
+      - 'studies/physiological_change/**'
+      - '.github/workflows/physiological-change.yml'
+      - 'AGENTS.md'
+  pull_request:
+    paths:
+      - 'studies/physiological_change/**'
+      - '.github/workflows/physiological-change.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Research invariant tests
+        run: python -m unittest discover -s studies/physiological_change/tests -v
+      - name: Synthetic replay
+        run: python studies/physiological_change/scripts/run_synthetic_demo.py --output runs/physiological-change/ci-synthetic
+      - name: Verify run
+        run: python studies/physiological_change/scripts/verify_run.py --run runs/physiological-change/ci-synthetic
